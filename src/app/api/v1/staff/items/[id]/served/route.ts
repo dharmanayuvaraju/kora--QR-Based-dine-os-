@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { markItemServed } from "@/lib/db/store";
+import { markItemServed, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["staff", "manager", "owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -20,5 +22,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Could not mark item served" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

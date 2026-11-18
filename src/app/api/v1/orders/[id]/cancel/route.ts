@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { cancelOrderAuthorized } from "@/lib/db/store";
+import { cancelOrderAuthorized, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({ reason: z.string().min(3).max(240) });
 
@@ -9,6 +9,8 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -23,5 +25,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Could not cancel order" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

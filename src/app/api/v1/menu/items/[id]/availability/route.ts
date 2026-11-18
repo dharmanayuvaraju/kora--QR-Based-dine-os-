@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { toggleMenuItemAvailability } from "@/lib/db/store";
+import { toggleMenuItemAvailability, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({ is_available: z.boolean() });
 
@@ -9,6 +9,8 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager", "chef"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -23,5 +25,8 @@ export async function PATCH(
       { error: err instanceof Error ? err.message : "Could not update availability" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import crypto from "crypto";
-import { initiateOnlinePayment } from "@/lib/db/store";
+import { initiateOnlinePayment, ensureDbReady, flushDb } from "@/lib/db/store";
 import { computeRazorpaySignature } from "@/lib/auth";
 
 const Schema = z.object({
@@ -12,6 +12,8 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   try {
     const body = Schema.parse(await req.json());
     const result = initiateOnlinePayment(
@@ -46,5 +48,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Failed to initialize payment" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

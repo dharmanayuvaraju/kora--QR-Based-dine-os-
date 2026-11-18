@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { regenerateTableQr } from "@/lib/db/store";
+import { regenerateTableQr, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function POST(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -19,5 +21,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Failed to regenerate QR" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

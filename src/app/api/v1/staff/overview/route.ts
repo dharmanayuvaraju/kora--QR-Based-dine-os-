@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { getDb, getSessionBillSummary } from "@/lib/db/store";
+import { getDb, getSessionBillSummary, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["staff", "manager", "owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -90,4 +92,7 @@ export async function GET() {
     recently_served,
     settings: db.settings,
   });
+  } finally {
+    await flushDb();
+  }
 }

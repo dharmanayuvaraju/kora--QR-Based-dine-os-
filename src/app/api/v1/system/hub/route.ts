@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db/store";
+import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const db = getDb();
   const tables = db.restaurant_tables.map((t) => {
     const session = db.table_sessions.find(
@@ -48,4 +50,7 @@ export async function GET() {
     },
     tables,
   });
+  } finally {
+    await flushDb();
+  }
 }

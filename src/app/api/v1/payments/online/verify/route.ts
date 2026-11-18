@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { verifyAndCompleteOnlinePayment } from "@/lib/db/store";
+import { verifyAndCompleteOnlinePayment, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({
   payment_id: z.string().min(1),
@@ -11,6 +11,8 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   try {
     const body = Schema.parse(await req.json());
     const result = verifyAndCompleteOnlinePayment({
@@ -26,5 +28,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Payment verification failed" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

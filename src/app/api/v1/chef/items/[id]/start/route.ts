@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { startItemPreparation } from "@/lib/db/store";
+import { startItemPreparation, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function POST(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["chef"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -19,5 +21,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Could not start prep" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

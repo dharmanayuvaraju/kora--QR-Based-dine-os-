@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db/store";
+import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const db = getDb();
   const categories = db.menu_categories
     .filter((c) => c.is_active)
@@ -13,4 +15,7 @@ export async function GET() {
     categories,
     items,
   });
+  } finally {
+    await flushDb();
+  }
 }

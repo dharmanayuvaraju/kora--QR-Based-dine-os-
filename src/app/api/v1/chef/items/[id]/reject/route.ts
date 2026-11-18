@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { rejectSingleItemByChef } from "@/lib/db/store";
+import { rejectSingleItemByChef, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({
   reason: z.string().min(2).max(200),
@@ -11,6 +11,8 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["chef", "owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -25,5 +27,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Could not reject item" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

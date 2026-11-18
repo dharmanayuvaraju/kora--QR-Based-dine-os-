@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { updateRestaurantSettings } from "@/lib/db/store";
+import { updateRestaurantSettings, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({
   name: z.string().min(2).max(80).optional(),
@@ -13,6 +13,8 @@ const Schema = z.object({
 });
 
 export async function PATCH(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -26,5 +28,8 @@ export async function PATCH(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Could not update settings" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

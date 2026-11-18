@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { getDb, getSessionBillSummary, recordExpense } from "@/lib/db/store";
+import { getDb, getSessionBillSummary, recordExpense, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -117,6 +119,9 @@ export async function GET() {
     expenses: isOwner ? db.expenses : [],
     audit_logs: db.audit_logs.slice(0, 80),
   });
+  } finally {
+    await flushDb();
+  }
 }
 
 const ExpenseSchema = z.object({
@@ -126,6 +131,8 @@ const ExpenseSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -139,5 +146,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Could not record expense" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

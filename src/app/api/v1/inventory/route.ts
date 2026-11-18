@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { adjustInventory, getDb } from "@/lib/db/store";
+import { adjustInventory, getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager", "chef"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -13,6 +15,9 @@ export async function GET() {
     items: db.inventory_items,
     movements: db.inventory_movements.slice(0, 40),
   });
+  } finally {
+    await flushDb();
+  }
 }
 
 const AdjustSchema = z.object({
@@ -23,6 +28,8 @@ const AdjustSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -42,5 +49,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Could not adjust stock" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

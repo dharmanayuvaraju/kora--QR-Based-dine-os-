@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { createEmployee, getDb } from "@/lib/db/store";
+import { createEmployee, getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
   const db = getDb();
   return NextResponse.json({ users: db.users });
+  } finally {
+    await flushDb();
+  }
 }
 
 const CreateUserSchema = z.object({
@@ -20,6 +25,8 @@ const CreateUserSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -33,5 +40,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Could not create employee" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

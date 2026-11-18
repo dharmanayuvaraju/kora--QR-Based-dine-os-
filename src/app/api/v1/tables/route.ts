@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { createTable, getDb, getSessionBillSummary } from "@/lib/db/store";
+import { createTable, getDb, getSessionBillSummary, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager", "staff", "chef"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -34,6 +36,9 @@ export async function GET() {
   });
 
   return NextResponse.json({ tables });
+  } finally {
+    await flushDb();
+  }
 }
 
 const CreateTableSchema = z.object({
@@ -43,6 +48,8 @@ const CreateTableSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -61,5 +68,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Could not create table" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

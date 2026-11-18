@@ -100,7 +100,11 @@ export default function PlatformHubPage() {
           <div className="flex items-center gap-2.5">
             <span className="hidden items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 sm:inline-flex">
               <Wifi className="h-3.5 w-3.5" />
-              {connected ? "Real-time Engine Active" : "Connecting..."}
+              {connected
+                ? hub?.mode === "supabase"
+                  ? "Supabase Live Sync"
+                  : "Real-time Engine Active"
+                : "Connecting..."}
             </span>
             <button
               type="button"

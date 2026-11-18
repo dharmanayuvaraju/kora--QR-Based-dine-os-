@@ -3,7 +3,11 @@ import os from "os";
 import path from "path";
 import crypto from "crypto";
 import { createSeedState } from "./seed";
-import { publishRealtimeEvent } from "../realtime";
+import {
+  flushRealtimeEventsToSupabase,
+  publishRealtimeEvent,
+} from "../realtime";
+import { getSupabaseAdminClient } from "../supabase";
 import { verifyRazorpaySignature, type SessionPayload } from "../auth";
 import type {
   DatabaseState,
@@ -30,6 +34,10 @@ const DB_FILE = path.join(DATA_DIR, "kora-db.json");
 declare global {
   // eslint-disable-next-line no-var
   var __koraDbState: DatabaseState | undefined;
+  // eslint-disable-next-line no-var
+  var __koraDbDirty: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __koraDbVersion: number | undefined;
 }
 
 function loadStateFromDisk(): DatabaseState {
@@ -58,12 +66,58 @@ function saveStateToDisk(state: DatabaseState): void {
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
     fs.renameSync(tmp, DB_FILE);
   } catch (err) {
-    // Fallback direct write if rename fails on Windows AV lock
     try {
       fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf8");
     } catch {
       console.warn("[KORA DB] Unable to persist DB file:", err);
     }
+  }
+}
+
+/**
+ * Loads latest authoritative state from Supabase PostgreSQL when configured.
+ * On first boot against a fresh Supabase DB, automatically seeds initial restaurant data.
+ */
+export async function ensureDbReady(): Promise<DatabaseState> {
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) {
+    return getDb();
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("kora_app_state")
+      .select("version, payload")
+      .eq("id", 1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("[KORA Supabase] Read error, falling back to local cache:", error.message);
+      return getDb();
+    }
+
+    if (data && data.payload && Array.isArray((data.payload as DatabaseState).restaurant_tables)) {
+      globalThis.__koraDbState = data.payload as DatabaseState;
+      globalThis.__koraDbVersion = Number(data.version ?? 1);
+      globalThis.__koraDbDirty = false;
+      return globalThis.__koraDbState;
+    }
+
+    // First-time Supabase initialization: seed & persist immediately
+    const seeded = createSeedState();
+    globalThis.__koraDbState = seeded;
+    globalThis.__koraDbVersion = 1;
+    globalThis.__koraDbDirty = false;
+    await supabase.from("kora_app_state").upsert({
+      id: 1,
+      version: 1,
+      payload: seeded,
+      updated_at: new Date().toISOString(),
+    });
+    return seeded;
+  } catch (err) {
+    console.warn("[KORA Supabase] ensureDbReady fallback:", err);
+    return getDb();
   }
 }
 
@@ -75,15 +129,43 @@ export function getDb(): DatabaseState {
 }
 
 export function commitDb(): void {
-  if (globalThis.__koraDbState) {
+  globalThis.__koraDbDirty = true;
+  if (globalThis.__koraDbState && !getSupabaseAdminClient()) {
     saveStateToDisk(globalThis.__koraDbState);
   }
+}
+
+/**
+ * Persists mutated state to Supabase PostgreSQL & flushes Supabase Realtime events.
+ * Always awaited by API routes before returning HTTP response so Vercel Lambdas never drop writes.
+ */
+export async function flushDb(): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) return;
+
+  if (globalThis.__koraDbDirty && globalThis.__koraDbState) {
+    const nextVersion = (globalThis.__koraDbVersion ?? 1) + 1;
+    const { error } = await supabase.from("kora_app_state").upsert({
+      id: 1,
+      version: nextVersion,
+      payload: globalThis.__koraDbState,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) {
+      console.error("[KORA Supabase] Persist error:", error.message);
+    } else {
+      globalThis.__koraDbVersion = nextVersion;
+      globalThis.__koraDbDirty = false;
+    }
+  }
+
+  await flushRealtimeEventsToSupabase();
 }
 
 export function resetDemoDatabase(): DatabaseState {
   const seeded = createSeedState();
   globalThis.__koraDbState = seeded;
-  saveStateToDisk(seeded);
+  commitDb();
   publishRealtimeEvent({
     type: "table.updated",
     channel: "restaurant:tables",

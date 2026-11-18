@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { softDeleteMenuItem, updateMenuItem } from "@/lib/db/store";
+import { softDeleteMenuItem, updateMenuItem, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -21,12 +23,17 @@ export async function PATCH(
       { status: 400 }
     );
   }
+  } finally {
+    await flushDb();
+  }
 }
 
 export async function DELETE(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -40,5 +47,8 @@ export async function DELETE(
       { error: err instanceof Error ? err.message : "Could not archive item" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

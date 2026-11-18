@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db/store";
+import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 import { setAuthCookie } from "@/lib/auth";
 import type { UserRole } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   try {
     const body = (await req.json()) as { email?: string; role?: UserRole };
     const db = getDb();
@@ -37,5 +39,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Login failed" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

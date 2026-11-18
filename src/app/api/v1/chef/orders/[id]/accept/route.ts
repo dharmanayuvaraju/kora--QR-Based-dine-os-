@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { acceptOrderByChef } from "@/lib/db/store";
+import { acceptOrderByChef, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function POST(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["chef", "owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -19,5 +21,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Could not accept order" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

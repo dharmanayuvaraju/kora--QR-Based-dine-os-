@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyRazorpayWebhookSignature } from "@/lib/auth";
-import { getDb, verifyAndCompleteOnlinePayment, commitDb } from "@/lib/db/store";
+import { getDb, verifyAndCompleteOnlinePayment, commitDb, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const rawBody = await req.text();
   const signature = req.headers.get("x-razorpay-signature") ?? "";
 
@@ -61,5 +63,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Webhook processing error" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

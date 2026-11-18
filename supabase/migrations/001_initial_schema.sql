@@ -302,6 +302,35 @@ CREATE POLICY "Non-chef authorized read payments" ON public.payments
 CREATE POLICY "Owner and manager read audit logs" ON public.audit_logs
   FOR SELECT USING (public.current_user_role() IN ('owner', 'manager'));
 
+-- Server-managed transactional state store (RLS locked: service_role only)
+CREATE TABLE IF NOT EXISTS public.kora_app_state (
+  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  version BIGINT NOT NULL DEFAULT 1,
+  payload JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.kora_app_state ENABLE ROW LEVEL SECURITY;
+-- Intentionally NO anon/authenticated policies: only SUPABASE_SERVICE_ROLE_KEY can access.
+
+-- Lightweight Realtime Event Stream for cross-device / serverless live updates
+CREATE TABLE IF NOT EXISTS public.kora_realtime_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  session_id TEXT,
+  table_number TEXT,
+  order_number INT,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.kora_realtime_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public subscribe realtime events" ON public.kora_realtime_events;
+CREATE POLICY "Public subscribe realtime events" ON public.kora_realtime_events
+  FOR SELECT USING (TRUE);
+
 -- Enable Supabase Realtime publications
 ALTER PUBLICATION supabase_realtime ADD TABLE
   public.orders,
@@ -309,4 +338,5 @@ ALTER PUBLICATION supabase_realtime ADD TABLE
   public.table_sessions,
   public.restaurant_tables,
   public.payments,
-  public.kitchen_tickets;
+  public.kitchen_tickets,
+  public.kora_realtime_events;

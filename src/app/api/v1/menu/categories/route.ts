@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { createCategory } from "@/lib/db/store";
+import { createCategory, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({
   name: z.string().min(2).max(60),
@@ -9,6 +9,8 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -22,5 +24,8 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Could not create category" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

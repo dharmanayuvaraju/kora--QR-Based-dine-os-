@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { getDb } from "@/lib/db/store";
+import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["chef", "manager", "owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -32,4 +34,7 @@ export async function GET() {
     menu_items,
     inventory_low,
   });
+  } finally {
+    await flushDb();
+  }
 }

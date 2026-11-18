@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { assignStaffToTable } from "@/lib/db/store";
+import { assignStaffToTable, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({ staff_id: z.string().min(1) });
 
@@ -9,6 +9,8 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -23,5 +25,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Failed to assign staff" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

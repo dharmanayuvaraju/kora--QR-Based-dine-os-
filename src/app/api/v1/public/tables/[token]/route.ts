@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, getSessionBillSummary, resolveTableByQrToken } from "@/lib/db/store";
+import { getDb, getSessionBillSummary, resolveTableByQrToken, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export async function GET(
   _req: NextRequest,
   context: { params: Promise<{ token: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const { token } = await context.params;
   const resolved = resolveTableByQrToken(token);
   if (!resolved) {
@@ -27,4 +29,7 @@ export async function GET(
     bill,
     settings: db.settings,
   });
+  } finally {
+    await flushDb();
+  }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { toggleEmployeeActive } from "@/lib/db/store";
+import { toggleEmployeeActive, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const Schema = z.object({ is_active: z.boolean() });
 
@@ -9,6 +9,8 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   const auth = await requireRole(["owner", "manager"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -23,5 +25,8 @@ export async function PATCH(
       { error: err instanceof Error ? err.message : "Could not update employee" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }

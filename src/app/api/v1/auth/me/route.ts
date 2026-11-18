@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedSession } from "@/lib/auth";
-import { getDb } from "@/lib/db/store";
+import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 
 export async function GET() {
+  await ensureDbReady();
+  try {
   const session = await getAuthenticatedSession();
   const db = getDb();
   const user = session
@@ -17,4 +19,7 @@ export async function GET() {
       .filter((u) => u.is_active)
       .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email, role: u.role })),
   });
+  } finally {
+    await flushDb();
+  }
 }

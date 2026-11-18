@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  createCustomerOrder,
-  getSessionBillSummary,
-} from "@/lib/db/store";
+import { createCustomerOrder, getSessionBillSummary, ensureDbReady, flushDb } from "@/lib/db/store";
 
 const CreateOrderSchema = z.object({
   items: z
@@ -24,6 +21,8 @@ export async function GET(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   try {
     const { id } = await context.params;
     const bill = getSessionBillSummary(id);
@@ -37,12 +36,17 @@ export async function GET(
       { status: 404 }
     );
   }
+  } finally {
+    await flushDb();
+  }
 }
 
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  await ensureDbReady();
+  try {
   try {
     const { id } = await context.params;
     const raw = await req.json();
@@ -66,5 +70,8 @@ export async function POST(
       { error: err instanceof Error ? err.message : "Could not place order" },
       { status: 400 }
     );
+  }
+  } finally {
+    await flushDb();
   }
 }
