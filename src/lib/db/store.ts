@@ -1,0 +1,1734 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
+import crypto from "crypto";
+import { createSeedState } from "./seed";
+import { publishRealtimeEvent } from "../realtime";
+import { verifyRazorpaySignature, type SessionPayload } from "../auth";
+import type {
+  DatabaseState,
+  MenuCategory,
+  MenuItem,
+  Order,
+  OrderItem,
+  Payment,
+  PaymentChannel,
+  RestaurantSettings,
+  RestaurantTable,
+  SessionBillSummary,
+  TableSession,
+  User,
+  UserRole,
+} from "../types";
+
+const DATA_DIR =
+  process.env.NETLIFY || process.env.VERCEL
+    ? path.join(os.tmpdir(), "kora-restaurant-data")
+    : path.join(process.cwd(), ".data");
+const DB_FILE = path.join(DATA_DIR, "kora-db.json");
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __koraDbState: DatabaseState | undefined;
+}
+
+function loadStateFromDisk(): DatabaseState {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const raw = fs.readFileSync(DB_FILE, "utf8");
+      const parsed = JSON.parse(raw) as DatabaseState;
+      if (parsed && Array.isArray(parsed.restaurant_tables) && Array.isArray(parsed.menu_items)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("[KORA DB] Failed reading local state, falling back to seed:", err);
+  }
+  const seeded = createSeedState();
+  saveStateToDisk(seeded);
+  return seeded;
+}
+
+function saveStateToDisk(state: DatabaseState): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const tmp = `${DB_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tmp, DB_FILE);
+  } catch (err) {
+    // Fallback direct write if rename fails on Windows AV lock
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf8");
+    } catch {
+      console.warn("[KORA DB] Unable to persist DB file:", err);
+    }
+  }
+}
+
+export function getDb(): DatabaseState {
+  if (!globalThis.__koraDbState) {
+    globalThis.__koraDbState = loadStateFromDisk();
+  }
+  return globalThis.__koraDbState;
+}
+
+export function commitDb(): void {
+  if (globalThis.__koraDbState) {
+    saveStateToDisk(globalThis.__koraDbState);
+  }
+}
+
+export function resetDemoDatabase(): DatabaseState {
+  const seeded = createSeedState();
+  globalThis.__koraDbState = seeded;
+  saveStateToDisk(seeded);
+  publishRealtimeEvent({
+    type: "table.updated",
+    channel: "restaurant:tables",
+    message: "Demo restaurant state reset to initial service snapshot",
+  });
+  return seeded;
+}
+
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+function addAudit(
+  db: DatabaseState,
+  actor: { id: string | null; name: string; role: string },
+  action: string,
+  entity_type: string,
+  entity_id: string,
+  metadata: Record<string, unknown> = {}
+) {
+  db.audit_logs.unshift({
+    id: crypto.randomUUID(),
+    actor_id: actor.id,
+    actor_name: actor.name,
+    actor_role: actor.role,
+    action,
+    entity_type,
+    entity_id,
+    metadata,
+    created_at: new Date().toISOString(),
+  });
+  if (db.audit_logs.length > 500) db.audit_logs.length = 500;
+}
+
+function logOrderStatus(
+  db: DatabaseState,
+  order_id: string,
+  order_item_id: string | null,
+  from_status: string | null,
+  to_status: string,
+  actor: { id: string | null; role: string },
+  reason: string | null = null
+) {
+  db.order_status_logs.unshift({
+    id: crypto.randomUUID(),
+    order_id,
+    order_item_id,
+    from_status,
+    to_status,
+    actor_id: actor.id,
+    actor_role: actor.role,
+    reason,
+    created_at: new Date().toISOString(),
+  });
+}
+
+function recomputeParentOrderStatus(order: Order): void {
+  const activeItems = order.items.filter(
+    (i) => i.status !== "rejected" && i.status !== "cancelled"
+  );
+  if (activeItems.length === 0) return;
+
+  if (activeItems.every((i) => i.status === "served")) {
+    order.status = "served";
+  } else if (activeItems.every((i) => i.status === "ready" || i.status === "served")) {
+    order.status = "ready";
+  } else if (
+    activeItems.some((i) => i.status === "preparing" || i.status === "ready" || i.status === "served")
+  ) {
+    order.status = "preparing";
+  } else if (activeItems.every((i) => i.status === "accepted")) {
+    order.status = "accepted";
+  }
+  order.updated_at = new Date().toISOString();
+}
+
+// ============================================================================
+// QR & TABLE SESSION OPERATIONS
+// ============================================================================
+
+export function resolveTableByQrToken(qrToken: string): {
+  table: RestaurantTable;
+  session: TableSession;
+  createdNewSession: boolean;
+} | null {
+  const db = getDb();
+  const table = db.restaurant_tables.find(
+    (t) => t.qr_token === qrToken && t.is_active && t.status !== "inactive"
+  );
+  if (!table) return null;
+
+  let session = db.table_sessions.find(
+    (s) => s.table_id === table.id && (s.status === "active" || s.status === "payment_pending")
+  );
+  let createdNewSession = false;
+
+  if (!session) {
+    session = {
+      id: crypto.randomUUID(),
+      table_id: table.id,
+      status: "active",
+      guest_count: 2,
+      bill_requested_at: null,
+      opened_at: new Date().toISOString(),
+      closed_at: null,
+      closed_by: null,
+    };
+    db.table_sessions.push(session);
+    table.status = "occupied";
+    createdNewSession = true;
+    commitDb();
+
+    publishRealtimeEvent({
+      type: "session.opened",
+      channel: "restaurant:tables",
+      session_id: session.id,
+      table_number: table.table_number,
+      message: `${table.table_number} started a new dining session via QR`,
+    });
+  }
+
+  return { table, session, createdNewSession };
+}
+
+export function getActiveSessionForTable(tableId: string): TableSession | null {
+  const db = getDb();
+  return (
+    db.table_sessions.find(
+      (s) => s.table_id === tableId && (s.status === "active" || s.status === "payment_pending")
+    ) ?? null
+  );
+}
+
+export function openTableSession(
+  tableId: string,
+  guestCount: number,
+  actor: SessionPayload
+): TableSession {
+  const db = getDb();
+  const table = db.restaurant_tables.find((t) => t.id === tableId && t.is_active);
+  if (!table) throw new Error("Table not found or inactive");
+
+  const existing = getActiveSessionForTable(tableId);
+  if (existing) return existing;
+
+  const session: TableSession = {
+    id: crypto.randomUUID(),
+    table_id: table.id,
+    status: "active",
+    guest_count: Math.max(1, guestCount || 2),
+    bill_requested_at: null,
+    opened_at: new Date().toISOString(),
+    closed_at: null,
+    closed_by: null,
+  };
+  db.table_sessions.push(session);
+  table.status = "occupied";
+
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "SESSION_OPENED",
+    "table_session",
+    session.id,
+    { table_number: table.table_number, guest_count: session.guest_count }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "session.opened",
+    channel: "restaurant:tables",
+    session_id: session.id,
+    table_number: table.table_number,
+    message: `${table.table_number} session opened by ${actor.fullName}`,
+  });
+
+  return session;
+}
+
+export function closeTableSession(
+  sessionId: string,
+  actor: { id: string | null; name: string; role: string },
+  options: { force?: boolean; reason?: string } = {}
+): TableSession {
+  const db = getDb();
+  const session = db.table_sessions.find((s) => s.id === sessionId);
+  if (!session) throw new Error("Table session not found");
+  if (session.status === "closed") return session;
+
+  const bill = getSessionBillSummary(sessionId);
+  if (bill.balance_due > 0.01 && !options.force) {
+    throw new Error(
+      `Cannot close table session while balance of ₹${bill.balance_due.toFixed(2)} is unpaid.`
+    );
+  }
+
+  const table = db.restaurant_tables.find((t) => t.id === session.table_id);
+  session.status = "closed";
+  session.closed_at = new Date().toISOString();
+  session.closed_by = actor.id;
+
+  // Mark all served orders in this session as completed
+  for (const order of db.orders) {
+    if (order.session_id === sessionId && order.status === "served") {
+      order.status = "completed";
+      order.updated_at = new Date().toISOString();
+    }
+  }
+
+  if (table && table.is_active) {
+    table.status = "available";
+  }
+
+  addAudit(
+    db,
+    actor,
+    options.force ? "SESSION_FORCE_CLOSED" : "SESSION_CLOSED",
+    "table_session",
+    session.id,
+    {
+      table_number: table?.table_number ?? "Unknown",
+      grand_total: bill.grand_total,
+      amount_paid: bill.amount_paid,
+      balance_due: bill.balance_due,
+      reason: options.reason ?? null,
+    }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "session.closed",
+    channel: "restaurant:tables",
+    session_id: session.id,
+    table_number: table?.table_number,
+    message: `${table?.table_number ?? "Table"} session closed & table available`,
+  });
+
+  return session;
+}
+
+export function regenerateTableQr(tableId: string, actor: SessionPayload): RestaurantTable {
+  const db = getDb();
+  const table = db.restaurant_tables.find((t) => t.id === tableId);
+  if (!table) throw new Error("Table not found");
+  const oldToken = table.qr_token;
+  table.qr_token = crypto.randomUUID();
+
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "QR_TOKEN_REGENERATED",
+    "restaurant_table",
+    table.id,
+    { table_number: table.table_number, previous_token_prefix: oldToken.slice(0, 8) }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "table.updated",
+    channel: "restaurant:tables",
+    table_number: table.table_number,
+    message: `QR code regenerated for ${table.table_number}`,
+  });
+
+  return table;
+}
+
+// ============================================================================
+// CUSTOMER ORDERING (SERVER-AUTHORITATIVE PRICING)
+// ============================================================================
+
+export interface CreateOrderItemInput {
+  menu_item_id: string;
+  variant_id?: string | null;
+  addon_ids?: string[];
+  quantity: number;
+  instructions?: string | null;
+}
+
+export function createCustomerOrder(
+  sessionId: string,
+  itemsInput: CreateOrderItemInput[],
+  specialInstructions?: string | null
+): Order {
+  const db = getDb();
+  const session = db.table_sessions.find((s) => s.id === sessionId);
+  if (!session) throw new Error("Table session not found. Please re-scan the table QR.");
+  if (session.status === "closed") {
+    throw new Error("This table session has already closed. Scan the table QR to start a new session.");
+  }
+
+  const table = db.restaurant_tables.find((t) => t.id === session.table_id);
+  if (!table || !table.is_active) throw new Error("Table is inactive.");
+
+  if (!itemsInput.length) throw new Error("Cart is empty.");
+
+  const orderId = crypto.randomUUID();
+  const nowIso = new Date().toISOString();
+  const orderItems: OrderItem[] = [];
+  let subtotal = 0;
+
+  for (const input of itemsInput) {
+    const qty = Math.floor(Number(input.quantity));
+    if (!Number.isFinite(qty) || qty <= 0 || qty > 50) {
+      throw new Error("Invalid item quantity.");
+    }
+    const menuItem = db.menu_items.find(
+      (m) => m.id === input.menu_item_id && !m.deleted_at
+    );
+    if (!menuItem) throw new Error("One of the selected menu items no longer exists.");
+    if (!menuItem.is_available) {
+      throw new Error(`"${menuItem.name}" is currently unavailable.`);
+    }
+
+    let variantName: string | null = null;
+    let variantDelta = 0;
+    if (input.variant_id && menuItem.variants.length > 0) {
+      const variant = menuItem.variants.find((v) => v.id === input.variant_id);
+      if (variant) {
+        variantName = variant.name;
+        variantDelta = variant.price_delta;
+      }
+    } else if (menuItem.variants.length > 0) {
+      const def = menuItem.variants.find((v) => v.is_default) ?? menuItem.variants[0];
+      variantName = def.name;
+      variantDelta = def.price_delta;
+    }
+
+    const orderItemId = crypto.randomUUID();
+    const resolvedAddons = (input.addon_ids ?? [])
+      .map((aid) => menuItem.addons.find((a) => a.id === aid))
+      .filter((a): a is NonNullable<typeof a> => Boolean(a))
+      .map((a) => ({
+        id: crypto.randomUUID(),
+        order_item_id: orderItemId,
+        addon_name_snapshot: a.name,
+        addon_price: a.price,
+      }));
+
+    const addonsTotal = resolvedAddons.reduce((sum, a) => sum + a.addon_price, 0);
+    const unitPrice = roundMoney(menuItem.price + variantDelta + addonsTotal);
+    const itemTotal = roundMoney(unitPrice * qty);
+    subtotal = roundMoney(subtotal + itemTotal);
+
+    orderItems.push({
+      id: orderItemId,
+      order_id: orderId,
+      menu_item_id: menuItem.id,
+      item_name_snapshot: menuItem.name,
+      variant_name_snapshot: variantName,
+      quantity: qty,
+      unit_price: unitPrice,
+      item_total: itemTotal,
+      status: "pending_approval",
+      instructions: input.instructions?.trim() || null,
+      addons: resolvedAddons,
+      started_at: null,
+      ready_at: null,
+      served_at: null,
+      served_by: null,
+    });
+  }
+
+  const taxAmount = roundMoney((subtotal * db.settings.tax_rate_percent) / 100);
+  const serviceCharge = roundMoney((subtotal * db.settings.service_charge_percent) / 100);
+  const totalAmount = roundMoney(subtotal + taxAmount + serviceCharge);
+
+  const order: Order = {
+    id: orderId,
+    session_id: session.id,
+    table_id: table.id,
+    table_number: table.table_number,
+    order_number: db.next_order_number++,
+    status: "pending_approval",
+    subtotal,
+    tax_amount: taxAmount,
+    service_charge: serviceCharge,
+    total_amount: totalAmount,
+    special_instructions: specialInstructions?.trim() || null,
+    rejection_reason: null,
+    cancellation_reason: null,
+    approved_by: null,
+    items: orderItems,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  // Reopen active dining if customer ordered more food after previously requesting bill
+  if (session.status === "payment_pending") {
+    session.status = "active";
+  }
+
+  db.orders.unshift(order);
+  logOrderStatus(
+    db,
+    order.id,
+    null,
+    null,
+    "pending_approval",
+    { id: null, role: "customer" },
+    `Order #${order.order_number} placed from ${table.table_number}`
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "order.created",
+    channel: "restaurant:kitchen",
+    session_id: session.id,
+    table_number: table.table_number,
+    order_number: order.order_number,
+    message: `New Order #${order.order_number} from ${table.table_number} (${orderItems.length} items) — awaiting Chef approval`,
+  });
+
+  return order;
+}
+
+// ============================================================================
+// CHEF KITCHEN WORKFLOW (APPROVAL + ITEM-LEVEL PREP & READINESS)
+// ============================================================================
+
+export function acceptOrderByChef(orderId: string, actor: SessionPayload): Order {
+  const db = getDb();
+  if (actor.role !== "chef" && actor.role !== "owner") {
+    throw new Error("Only the Chef (or Owner override) can accept kitchen orders.");
+  }
+  const order = db.orders.find((o) => o.id === orderId);
+  if (!order) throw new Error("Order not found");
+  if (order.status !== "pending_approval") {
+    throw new Error(`Order #${order.order_number} is already ${order.status}.`);
+  }
+
+  const nowIso = new Date().toISOString();
+  order.status = "accepted";
+  order.approved_by = actor.userId;
+  order.updated_at = nowIso;
+
+  for (const item of order.items) {
+    if (item.status === "pending_approval") {
+      item.status = "accepted";
+      db.kitchen_tickets.push({
+        id: crypto.randomUUID(),
+        order_id: order.id,
+        order_item_id: item.id,
+        chef_id: actor.userId,
+        status: "queued",
+        created_at: nowIso,
+        updated_at: nowIso,
+      });
+    }
+  }
+
+  logOrderStatus(
+    db,
+    order.id,
+    null,
+    "pending_approval",
+    "accepted",
+    { id: actor.userId, role: actor.role },
+    actor.role === "owner" ? "Owner override approval" : "Accepted by Chef"
+  );
+
+  if (actor.role === "owner") {
+    addAudit(
+      db,
+      { id: actor.userId, name: actor.fullName, role: actor.role },
+      "ORDER_APPROVAL_OVERRIDE",
+      "order",
+      order.id,
+      { order_number: order.order_number, table_number: order.table_number }
+    );
+  }
+
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "order.accepted",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `Order #${order.order_number} (${order.table_number}) accepted by Kitchen`,
+  });
+
+  return order;
+}
+
+export function rejectOrderByChef(
+  orderId: string,
+  reason: string,
+  actor: SessionPayload
+): Order {
+  const db = getDb();
+  if (actor.role !== "chef" && actor.role !== "owner") {
+    throw new Error("Only the Chef (or Owner override) can reject kitchen orders.");
+  }
+  const cleanReason = reason.trim();
+  if (!cleanReason) throw new Error("A rejection reason is mandatory.");
+
+  const order = db.orders.find((o) => o.id === orderId);
+  if (!order) throw new Error("Order not found");
+  if (order.status !== "pending_approval") {
+    throw new Error("Only pending orders can be rejected by the kitchen.");
+  }
+
+  order.status = "rejected";
+  order.rejection_reason = cleanReason;
+  order.updated_at = new Date().toISOString();
+  for (const item of order.items) {
+    item.status = "rejected";
+  }
+
+  logOrderStatus(
+    db,
+    order.id,
+    null,
+    "pending_approval",
+    "rejected",
+    { id: actor.userId, role: actor.role },
+    cleanReason
+  );
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "ORDER_REJECTED_BY_CHEF",
+    "order",
+    order.id,
+    { order_number: order.order_number, table_number: order.table_number, reason: cleanReason }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "order.rejected",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `Order #${order.order_number} (${order.table_number}) rejected: ${cleanReason}`,
+  });
+
+  return order;
+}
+
+export function rejectSingleItemByChef(
+  itemId: string,
+  reason: string,
+  actor: SessionPayload
+): Order {
+  const db = getDb();
+  if (actor.role !== "chef" && actor.role !== "owner") {
+    throw new Error("Only the Chef can reject individual items.");
+  }
+  const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
+  if (!order) throw new Error("Order item not found");
+  const item = order.items.find((i) => i.id === itemId)!;
+
+  const prev = item.status;
+  item.status = "rejected";
+  item.instructions = `${item.instructions ? `${item.instructions} · ` : ""}[Rejected: ${reason}]`;
+
+  // Recalculate order totals excluding rejected items
+  const activeSubtotal = roundMoney(
+    order.items
+      .filter((i) => i.status !== "rejected" && i.status !== "cancelled")
+      .reduce((s, i) => s + i.item_total, 0)
+  );
+  order.subtotal = activeSubtotal;
+  order.tax_amount = roundMoney((activeSubtotal * db.settings.tax_rate_percent) / 100);
+  order.service_charge = roundMoney((activeSubtotal * db.settings.service_charge_percent) / 100);
+  order.total_amount = roundMoney(order.subtotal + order.tax_amount + order.service_charge);
+
+  const remainingActive = order.items.filter(
+    (i) => i.status !== "rejected" && i.status !== "cancelled"
+  );
+  if (remainingActive.length === 0) {
+    order.status = "rejected";
+    order.rejection_reason = reason;
+  } else {
+    recomputeParentOrderStatus(order);
+  }
+
+  logOrderStatus(
+    db,
+    order.id,
+    item.id,
+    prev,
+    "rejected",
+    { id: actor.userId, role: actor.role },
+    reason
+  );
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "ORDER_ITEM_REJECTED",
+    "order_item",
+    item.id,
+    { order_number: order.order_number, item: item.item_name_snapshot, reason }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "order.rejected",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `${item.item_name_snapshot} in Order #${order.order_number} unavailable: ${reason}`,
+  });
+
+  return order;
+}
+
+export function startItemPreparation(itemId: string, actor: SessionPayload): Order {
+  const db = getDb();
+  if (actor.role !== "chef") {
+    throw new Error("Only the Chef can start kitchen food preparation.");
+  }
+  const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
+  if (!order) throw new Error("Order item not found");
+  const item = order.items.find((i) => i.id === itemId)!;
+
+  if (item.status !== "accepted") {
+    throw new Error(`Item cannot start preparing from status '${item.status}'.`);
+  }
+
+  const nowIso = new Date().toISOString();
+  item.status = "preparing";
+  item.started_at = nowIso;
+
+  const ticket = db.kitchen_tickets.find((kt) => kt.order_item_id === item.id);
+  if (ticket) {
+    ticket.status = "preparing";
+    ticket.chef_id = actor.userId;
+    ticket.updated_at = nowIso;
+  }
+
+  recomputeParentOrderStatus(order);
+  logOrderStatus(
+    db,
+    order.id,
+    item.id,
+    "accepted",
+    "preparing",
+    { id: actor.userId, role: actor.role },
+    null
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "item.preparing",
+    channel: "restaurant:kitchen",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `${item.item_name_snapshot} (Order #${order.order_number}) is now cooking`,
+  });
+
+  return order;
+}
+
+export function markItemReady(itemId: string, actor: SessionPayload): Order {
+  const db = getDb();
+  if (actor.role !== "chef") {
+    throw new Error("Only the Chef can mark food ready for pickup.");
+  }
+  const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
+  if (!order) throw new Error("Order item not found");
+  const item = order.items.find((i) => i.id === itemId)!;
+
+  if (item.status !== "accepted" && item.status !== "preparing") {
+    throw new Error(`Item cannot be marked ready from status '${item.status}'.`);
+  }
+
+  const prev = item.status;
+  const nowIso = new Date().toISOString();
+  item.status = "ready";
+  if (!item.started_at) item.started_at = nowIso;
+  item.ready_at = nowIso;
+
+  const ticket = db.kitchen_tickets.find((kt) => kt.order_item_id === item.id);
+  if (ticket) {
+    ticket.status = "ready";
+    ticket.updated_at = nowIso;
+  }
+
+  recomputeParentOrderStatus(order);
+  logOrderStatus(
+    db,
+    order.id,
+    item.id,
+    prev,
+    "ready",
+    { id: actor.userId, role: actor.role },
+    null
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "item.ready",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `READY FOR PICKUP: ${item.quantity}x ${item.item_name_snapshot} → ${order.table_number} (Order #${order.order_number})`,
+  });
+
+  return order;
+}
+
+// ============================================================================
+// STAFF DELIVERY WORKFLOW
+// ============================================================================
+
+export function markItemServed(
+  itemId: string,
+  actor: SessionPayload,
+  overrideReason?: string
+): Order {
+  const db = getDb();
+  if (!["staff", "manager", "owner"].includes(actor.role)) {
+    throw new Error("Only floor staff (or authorized manager override) can mark items served.");
+  }
+
+  const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
+  if (!order) throw new Error("Order item not found");
+  const item = order.items.find((i) => i.id === itemId)!;
+
+  if (item.status !== "ready") {
+    if (actor.role === "staff") {
+      throw new Error("Staff can only mark food as served once the kitchen marks it READY.");
+    }
+    if (!overrideReason?.trim()) {
+      throw new Error("Manager/Owner override requires a reason.");
+    }
+  }
+
+  const prev = item.status;
+  const nowIso = new Date().toISOString();
+  item.status = "served";
+  item.served_at = nowIso;
+  item.served_by = actor.userId;
+
+  const ticket = db.kitchen_tickets.find((kt) => kt.order_item_id === item.id);
+  if (ticket) {
+    ticket.status = "picked_up";
+    ticket.updated_at = nowIso;
+  }
+
+  recomputeParentOrderStatus(order);
+  logOrderStatus(
+    db,
+    order.id,
+    item.id,
+    prev,
+    "served",
+    { id: actor.userId, role: actor.role },
+    overrideReason ?? null
+  );
+
+  if (prev !== "ready") {
+    addAudit(
+      db,
+      { id: actor.userId, name: actor.fullName, role: actor.role },
+      "ITEM_SERVED_OVERRIDE",
+      "order_item",
+      item.id,
+      { order_number: order.order_number, item: item.item_name_snapshot, reason: overrideReason }
+    );
+  }
+
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "item.served",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `${item.quantity}x ${item.item_name_snapshot} served to ${order.table_number}`,
+  });
+
+  return order;
+}
+
+export function cancelOrderAuthorized(
+  orderId: string,
+  reason: string,
+  actor: SessionPayload
+): Order {
+  const db = getDb();
+  if (!["manager", "owner"].includes(actor.role)) {
+    throw new Error("Only Manager or Owner can authorize order cancellation.");
+  }
+  const cleanReason = reason.trim();
+  if (!cleanReason) throw new Error("Cancellation reason is required.");
+
+  const order = db.orders.find((o) => o.id === orderId);
+  if (!order) throw new Error("Order not found");
+  if (order.status === "completed" || order.status === "cancelled") {
+    throw new Error(`Order #${order.order_number} cannot be cancelled.`);
+  }
+
+  const prev = order.status;
+  order.status = "cancelled";
+  order.cancellation_reason = cleanReason;
+  order.updated_at = new Date().toISOString();
+  for (const item of order.items) {
+    if (item.status !== "rejected") item.status = "cancelled";
+  }
+
+  logOrderStatus(
+    db,
+    order.id,
+    null,
+    prev,
+    "cancelled",
+    { id: actor.userId, role: actor.role },
+    cleanReason
+  );
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "ORDER_CANCELLED",
+    "order",
+    order.id,
+    { order_number: order.order_number, table_number: order.table_number, reason: cleanReason }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "order.cancelled",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `Order #${order.order_number} (${order.table_number}) cancelled by ${actor.role}: ${cleanReason}`,
+  });
+
+  return order;
+}
+
+// ============================================================================
+// COMBINED TABLE BILLING & DUAL-MODE PAYMENTS (RAZORPAY + COUNTER)
+// ============================================================================
+
+export function getSessionBillSummary(sessionId: string): SessionBillSummary {
+  const db = getDb();
+  const session = db.table_sessions.find((s) => s.id === sessionId);
+  if (!session) throw new Error("Session not found");
+  const table = db.restaurant_tables.find((t) => t.id === session.table_id);
+
+  const sessionOrders = db.orders.filter((o) => o.session_id === sessionId);
+  const billableOrders = sessionOrders.filter(
+    (o) => o.status !== "rejected" && o.status !== "cancelled"
+  );
+
+  const lineItems: SessionBillSummary["line_items"] = [];
+  let subtotal = 0;
+
+  for (const order of billableOrders) {
+    for (const item of order.items) {
+      if (item.status === "rejected" || item.status === "cancelled") continue;
+      subtotal = roundMoney(subtotal + item.item_total);
+      lineItems.push({
+        order_number: order.order_number,
+        item_name: item.item_name_snapshot,
+        variant_name: item.variant_name_snapshot,
+        addons: item.addons.map((a) => a.addon_name_snapshot),
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        item_total: item.item_total,
+        status: item.status,
+      });
+    }
+  }
+
+  const taxAmount = roundMoney((subtotal * db.settings.tax_rate_percent) / 100);
+  const serviceCharge = roundMoney((subtotal * db.settings.service_charge_percent) / 100);
+  const grandTotal = roundMoney(subtotal + taxAmount + serviceCharge);
+
+  const payments = db.payments.filter((p) => p.session_id === sessionId);
+  const paidGross = roundMoney(
+    payments
+      .filter((p) => p.status === "paid" || p.status === "refunded")
+      .reduce((sum, p) => sum + p.amount, 0)
+  );
+  const paymentIds = new Set(payments.map((p) => p.id));
+  const refundedAmount = roundMoney(
+    db.refunds
+      .filter((r) => paymentIds.has(r.payment_id) && r.status === "processed")
+      .reduce((sum, r) => sum + r.amount, 0)
+  );
+  const netPaid = roundMoney(Math.max(0, paidGross - refundedAmount));
+  const balanceDue = roundMoney(Math.max(0, grandTotal - netPaid));
+
+  let paymentState: SessionBillSummary["payment_state"] = "unpaid";
+  if (grandTotal > 0 && balanceDue <= 0.01) paymentState = "paid";
+  else if (netPaid > 0) paymentState = "partially_paid";
+
+  return {
+    session_id: session.id,
+    table_id: session.table_id,
+    table_number: table?.table_number ?? "Table",
+    session_status: session.status,
+    bill_requested_at: session.bill_requested_at,
+    opened_at: session.opened_at,
+    orders: sessionOrders,
+    line_items: lineItems,
+    subtotal,
+    tax_rate_percent: db.settings.tax_rate_percent,
+    tax_amount: taxAmount,
+    service_charge_percent: db.settings.service_charge_percent,
+    service_charge: serviceCharge,
+    grand_total: grandTotal,
+    amount_paid: netPaid,
+    refunded_amount: refundedAmount,
+    balance_due: balanceDue,
+    payment_state: paymentState,
+    payments,
+  };
+}
+
+export function requestSessionBill(sessionId: string, preferredMethod: "online" | "counter" = "counter") {
+  const db = getDb();
+  const session = db.table_sessions.find((s) => s.id === sessionId);
+  if (!session) throw new Error("Session not found");
+  if (session.status === "closed") throw new Error("Session is already closed.");
+
+  const table = db.restaurant_tables.find((t) => t.id === session.table_id);
+  const bill = getSessionBillSummary(sessionId);
+  if (bill.grand_total <= 0) {
+    throw new Error("No billable orders in this session yet.");
+  }
+
+  session.status = "payment_pending";
+  session.bill_requested_at = new Date().toISOString();
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "bill.requested",
+    channel: "restaurant:payments",
+    session_id: session.id,
+    table_number: table?.table_number,
+    message: `${table?.table_number} requested final bill (${preferredMethod === "counter" ? "Pay at Counter" : "Online"}) — Balance ₹${bill.balance_due.toFixed(2)}`,
+  });
+
+  return getSessionBillSummary(sessionId);
+}
+
+export function initiateOnlinePayment(
+  sessionId: string,
+  amountInput: number | undefined,
+  channel: "upi" | "card",
+  idempotencyKey?: string
+) {
+  const db = getDb();
+  const bill = getSessionBillSummary(sessionId);
+  if (bill.session_status === "closed") throw new Error("Session is already closed.");
+  if (bill.balance_due <= 0.01) throw new Error("Bill is already fully paid.");
+
+  if (idempotencyKey) {
+    const existing = db.payments.find((p) => p.idempotency_key === idempotencyKey);
+    if (existing) {
+      const tx = db.payment_transactions.find((t) => t.payment_id === existing.id);
+      return { payment: existing, transaction: tx! };
+    }
+  }
+
+  const amount = roundMoney(
+    amountInput && amountInput > 0 ? Math.min(amountInput, bill.balance_due) : bill.balance_due
+  );
+
+  const nowIso = new Date().toISOString();
+  const paymentId = crypto.randomUUID();
+  const gatewayOrderId = `order_KORA${crypto.randomBytes(5).toString("hex")}`;
+  const receiptNumber = `KORA-${new Date().getFullYear()}-${db.next_receipt_seq++}`;
+
+  const payment: Payment = {
+    id: paymentId,
+    session_id: sessionId,
+    table_number: bill.table_number,
+    amount,
+    method: "online",
+    channel,
+    status: "processing",
+    receipt_number: receiptNumber,
+    collected_by: null,
+    collected_by_name: channel === "upi" ? "Razorpay UPI" : "Razorpay Card",
+    idempotency_key: idempotencyKey ?? crypto.randomUUID(),
+    paid_at: null,
+    created_at: nowIso,
+  };
+
+  const transaction = {
+    id: crypto.randomUUID(),
+    payment_id: paymentId,
+    gateway: "razorpay" as const,
+    gateway_order_id: gatewayOrderId,
+    gateway_payment_id: null,
+    gateway_signature: null,
+    gateway_event_id: null,
+    signature_verified: false,
+    created_at: nowIso,
+  };
+
+  db.payments.unshift(payment);
+  db.payment_transactions.unshift(transaction);
+  commitDb();
+
+  return { payment, transaction };
+}
+
+export function verifyAndCompleteOnlinePayment(params: {
+  paymentId: string;
+  gatewayOrderId: string;
+  gatewayPaymentId: string;
+  gatewaySignature: string;
+  simulateFail?: boolean;
+}) {
+  const db = getDb();
+  const payment = db.payments.find((p) => p.id === params.paymentId);
+  if (!payment) throw new Error("Payment record not found");
+
+  // Idempotency: ignore duplicate gateway confirmation if already paid
+  if (payment.status === "paid") {
+    return { payment, bill: getSessionBillSummary(payment.session_id), duplicate: true };
+  }
+
+  const tx = db.payment_transactions.find(
+    (t) => t.payment_id === payment.id && t.gateway_order_id === params.gatewayOrderId
+  );
+  if (!tx) throw new Error("Payment transaction mismatch.");
+
+  if (params.simulateFail) {
+    payment.status = "failed";
+    commitDb();
+    return { payment, bill: getSessionBillSummary(payment.session_id), duplicate: false };
+  }
+
+  const valid = verifyRazorpaySignature(
+    params.gatewayOrderId,
+    params.gatewayPaymentId,
+    params.gatewaySignature
+  );
+  if (!valid) {
+    payment.status = "failed";
+    commitDb();
+    throw new Error("Razorpay payment signature verification failed on server.");
+  }
+
+  payment.status = "paid";
+  payment.paid_at = new Date().toISOString();
+  tx.gateway_payment_id = params.gatewayPaymentId;
+  tx.gateway_signature = params.gatewaySignature;
+  tx.signature_verified = true;
+
+  addAudit(
+    db,
+    { id: null, name: "Razorpay Gateway", role: "system" },
+    "ONLINE_PAYMENT_VERIFIED",
+    "payment",
+    payment.id,
+    {
+      table_number: payment.table_number,
+      amount: payment.amount,
+      gateway_payment_id: params.gatewayPaymentId,
+      receipt: payment.receipt_number,
+    }
+  );
+  commitDb();
+
+  let bill = getSessionBillSummary(payment.session_id);
+  publishRealtimeEvent({
+    type: "payment.completed",
+    channel: "restaurant:payments",
+    session_id: payment.session_id,
+    table_number: payment.table_number,
+    message: `Online payment of ₹${payment.amount.toFixed(2)} verified for ${payment.table_number} (${payment.receipt_number})`,
+  });
+
+  if (bill.balance_due <= 0.01) {
+    closeTableSession(payment.session_id, {
+      id: null,
+      name: "Automated Billing Engine",
+      role: "system",
+    });
+    bill = getSessionBillSummary(payment.session_id);
+  }
+
+  return { payment, bill, duplicate: false };
+}
+
+export function recordCounterPayment(
+  sessionId: string,
+  amountInput: number,
+  channel: PaymentChannel,
+  actor: SessionPayload
+) {
+  const db = getDb();
+  if (!["staff", "manager", "owner"].includes(actor.role)) {
+    throw new Error("Chefs cannot access or confirm payments.");
+  }
+
+  const bill = getSessionBillSummary(sessionId);
+  if (bill.session_status === "closed") throw new Error("Session is already closed.");
+  if (bill.balance_due <= 0.01) throw new Error("Session has no remaining balance due.");
+
+  const amount = roundMoney(Math.min(Math.max(0.01, amountInput), bill.balance_due));
+  const nowIso = new Date().toISOString();
+  const payment: Payment = {
+    id: crypto.randomUUID(),
+    session_id: sessionId,
+    table_number: bill.table_number,
+    amount,
+    method: "counter",
+    channel,
+    status: "paid",
+    receipt_number: `KORA-${new Date().getFullYear()}-${db.next_receipt_seq++}`,
+    collected_by: actor.userId,
+    collected_by_name: actor.fullName,
+    idempotency_key: crypto.randomUUID(),
+    paid_at: nowIso,
+    created_at: nowIso,
+  };
+
+  db.payments.unshift(payment);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "COUNTER_PAYMENT_CONFIRMED",
+    "payment",
+    payment.id,
+    {
+      table_number: bill.table_number,
+      amount,
+      channel,
+      receipt: payment.receipt_number,
+    }
+  );
+  commitDb();
+
+  let updatedBill = getSessionBillSummary(sessionId);
+  publishRealtimeEvent({
+    type: "payment.completed",
+    channel: "restaurant:payments",
+    session_id: sessionId,
+    table_number: bill.table_number,
+    message: `Counter payment ₹${amount.toFixed(2)} (${channel.toUpperCase()}) collected for ${bill.table_number} by ${actor.fullName}`,
+  });
+
+  if (updatedBill.balance_due <= 0.01) {
+    closeTableSession(sessionId, {
+      id: actor.userId,
+      name: actor.fullName,
+      role: actor.role,
+    });
+    updatedBill = getSessionBillSummary(sessionId);
+  }
+
+  return { payment, bill: updatedBill };
+}
+
+export function issuePaymentRefund(
+  paymentId: string,
+  amountInput: number,
+  reason: string,
+  actor: SessionPayload
+) {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can authorize refunds.");
+  }
+  const cleanReason = reason.trim();
+  if (!cleanReason) throw new Error("Refund reason is mandatory.");
+
+  const payment = db.payments.find((p) => p.id === paymentId);
+  if (!payment) throw new Error("Payment not found");
+  if (payment.status !== "paid") throw new Error("Only paid transactions can be refunded.");
+
+  const alreadyRefunded = db.refunds
+    .filter((r) => r.payment_id === payment.id && r.status === "processed")
+    .reduce((sum, r) => sum + r.amount, 0);
+  const maxRefundable = roundMoney(payment.amount - alreadyRefunded);
+  if (maxRefundable <= 0) throw new Error("Payment is already fully refunded.");
+
+  const amount = roundMoney(Math.min(Math.max(0.01, amountInput), maxRefundable));
+  const refund = {
+    id: crypto.randomUUID(),
+    payment_id: payment.id,
+    amount,
+    reason: cleanReason,
+    status: "processed" as const,
+    authorized_by: actor.userId,
+    authorized_by_name: actor.fullName,
+    created_at: new Date().toISOString(),
+  };
+
+  db.refunds.unshift(refund);
+  if (roundMoney(alreadyRefunded + amount) >= payment.amount) {
+    payment.status = "refunded";
+  }
+
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "PAYMENT_REFUNDED",
+    "refund",
+    refund.id,
+    {
+      payment_id: payment.id,
+      receipt: payment.receipt_number,
+      amount,
+      reason: cleanReason,
+    }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "payment.refunded",
+    channel: "restaurant:payments",
+    session_id: payment.session_id,
+    table_number: payment.table_number,
+    message: `Refund of ₹${amount.toFixed(2)} issued for ${payment.receipt_number}`,
+  });
+
+  return refund;
+}
+
+// ============================================================================
+// MANAGEMENT CRUD (MENU, TABLES, STAFF, INVENTORY, EXPENSES, SETTINGS)
+// ============================================================================
+
+export function toggleMenuItemAvailability(
+  itemId: string,
+  isAvailable: boolean,
+  actor: SessionPayload
+): MenuItem {
+  const db = getDb();
+  if (!["owner", "manager", "chef"].includes(actor.role)) {
+    throw new Error("Unauthorized to toggle item availability.");
+  }
+  const item = db.menu_items.find((m) => m.id === itemId && !m.deleted_at);
+  if (!item) throw new Error("Menu item not found");
+
+  item.is_available = isAvailable;
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "MENU_ITEM_AVAILABILITY_CHANGED",
+    "menu_item",
+    item.id,
+    { item: item.name, is_available: isAvailable }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "menu.updated",
+    channel: "restaurant:orders",
+    message: `${item.name} marked ${isAvailable ? "AVAILABLE" : "OUT OF STOCK"} by ${actor.fullName}`,
+  });
+
+  return item;
+}
+
+export function createMenuItem(
+  data: Omit<MenuItem, "id" | "deleted_at" | "variants" | "addons"> & {
+    variants?: Array<{ name: string; price_delta: number; is_default?: boolean }>;
+    addons?: Array<{ name: string; price: number }>;
+  },
+  actor: SessionPayload
+): MenuItem {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can create menu items.");
+  }
+  const id = crypto.randomUUID();
+  const item: MenuItem = {
+    ...data,
+    id,
+    deleted_at: null,
+    variants: (data.variants ?? []).map((v, idx) => ({
+      id: crypto.randomUUID(),
+      menu_item_id: id,
+      name: v.name,
+      price_delta: v.price_delta,
+      is_default: v.is_default ?? idx === 0,
+    })),
+    addons: (data.addons ?? []).map((a) => ({
+      id: crypto.randomUUID(),
+      name: a.name,
+      price: a.price,
+    })),
+  };
+  db.menu_items.push(item);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "MENU_ITEM_CREATED",
+    "menu_item",
+    item.id,
+    { name: item.name, price: item.price }
+  );
+  commitDb();
+  publishRealtimeEvent({
+    type: "menu.updated",
+    channel: "restaurant:orders",
+    message: `New dish added to menu: ${item.name}`,
+  });
+  return item;
+}
+
+export function updateMenuItem(
+  itemId: string,
+  patch: Partial<Pick<MenuItem, "name" | "description" | "price" | "category_id" | "dietary" | "spice_level" | "prep_minutes" | "is_bestseller" | "is_available" | "image_url">>,
+  actor: SessionPayload
+): MenuItem {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can edit menu items.");
+  }
+  const item = db.menu_items.find((m) => m.id === itemId && !m.deleted_at);
+  if (!item) throw new Error("Menu item not found");
+
+  // Only owner can change prices if strict control desired; both allowed per matrix
+  Object.assign(item, patch);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "MENU_ITEM_UPDATED",
+    "menu_item",
+    item.id,
+    { name: item.name, changes: patch }
+  );
+  commitDb();
+  publishRealtimeEvent({
+    type: "menu.updated",
+    channel: "restaurant:orders",
+    message: `Menu updated: ${item.name}`,
+  });
+  return item;
+}
+
+export function softDeleteMenuItem(itemId: string, actor: SessionPayload): void {
+  const db = getDb();
+  if (actor.role !== "owner") {
+    throw new Error("Only Owner can archive menu items.");
+  }
+  const item = db.menu_items.find((m) => m.id === itemId && !m.deleted_at);
+  if (!item) throw new Error("Menu item not found");
+  item.deleted_at = new Date().toISOString();
+  item.is_available = false;
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "MENU_ITEM_ARCHIVED",
+    "menu_item",
+    item.id,
+    { name: item.name }
+  );
+  commitDb();
+}
+
+export function createCategory(
+  name: string,
+  description: string,
+  actor: SessionPayload
+): MenuCategory {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can create categories.");
+  }
+  const cat: MenuCategory = {
+    id: crypto.randomUUID(),
+    name: name.trim(),
+    description: description.trim(),
+    sort_order: db.menu_categories.length + 1,
+    is_active: true,
+  };
+  db.menu_categories.push(cat);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "CATEGORY_CREATED",
+    "menu_category",
+    cat.id,
+    { name: cat.name }
+  );
+  commitDb();
+  return cat;
+}
+
+export function createTable(
+  tableNumber: string,
+  section: string,
+  capacity: number,
+  actor: SessionPayload
+): RestaurantTable {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can create tables.");
+  }
+  const normalized = tableNumber.trim();
+  if (db.restaurant_tables.some((t) => t.table_number.toLowerCase() === normalized.toLowerCase())) {
+    throw new Error(`Table "${normalized}" already exists.`);
+  }
+  const table: RestaurantTable = {
+    id: crypto.randomUUID(),
+    table_number: normalized,
+    section: section.trim() || "Main Dining",
+    qr_token: crypto.randomUUID(),
+    capacity: Math.max(1, capacity || 4),
+    status: "available",
+    is_active: true,
+    created_at: new Date().toISOString(),
+  };
+  db.restaurant_tables.push(table);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "TABLE_CREATED",
+    "restaurant_table",
+    table.id,
+    { table_number: table.table_number, section: table.section }
+  );
+  commitDb();
+  publishRealtimeEvent({
+    type: "table.updated",
+    channel: "restaurant:tables",
+    table_number: table.table_number,
+    message: `New table added: ${table.table_number}`,
+  });
+  return table;
+}
+
+export function assignStaffToTable(
+  tableId: string,
+  staffId: string,
+  actor: SessionPayload
+) {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can assign staff to tables.");
+  }
+  const table = db.restaurant_tables.find((t) => t.id === tableId);
+  const staff = db.users.find((u) => u.id === staffId && u.role === "staff" && u.is_active);
+  if (!table || !staff) throw new Error("Invalid table or staff member.");
+
+  for (const ta of db.table_assignments) {
+    if (ta.table_id === tableId && ta.is_active) {
+      ta.is_active = false;
+    }
+  }
+  const assignment = {
+    id: crypto.randomUUID(),
+    table_id: tableId,
+    staff_id: staffId,
+    assigned_by: actor.userId,
+    is_active: true,
+    assigned_at: new Date().toISOString(),
+  };
+  db.table_assignments.push(assignment);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "TABLE_STAFF_ASSIGNED",
+    "table_assignment",
+    assignment.id,
+    { table_number: table.table_number, staff_name: staff.full_name }
+  );
+  commitDb();
+  publishRealtimeEvent({
+    type: "table.updated",
+    channel: "restaurant:tables",
+    table_number: table.table_number,
+    message: `${staff.full_name} assigned to ${table.table_number}`,
+  });
+  return assignment;
+}
+
+export function createEmployee(
+  data: { full_name: string; email: string; role: UserRole; phone?: string },
+  actor: SessionPayload
+): User {
+  const db = getDb();
+  if (actor.role === "manager" && !["staff", "chef"].includes(data.role)) {
+    throw new Error("Managers can only create Staff and Chef accounts. Only Owner can create Managers.");
+  }
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Unauthorized to create employees.");
+  }
+  const email = data.email.trim().toLowerCase();
+  if (db.users.some((u) => u.email.toLowerCase() === email)) {
+    throw new Error("An employee with this email already exists.");
+  }
+
+  const user: User = {
+    id: crypto.randomUUID(),
+    full_name: data.full_name.trim(),
+    email,
+    role: data.role,
+    phone: data.phone?.trim(),
+    is_active: true,
+    created_at: new Date().toISOString(),
+  };
+  db.users.push(user);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "EMPLOYEE_CREATED",
+    "user",
+    user.id,
+    { full_name: user.full_name, role: user.role, email: user.email }
+  );
+  commitDb();
+  return user;
+}
+
+export function toggleEmployeeActive(userId: string, isActive: boolean, actor: SessionPayload): User {
+  const db = getDb();
+  const target = db.users.find((u) => u.id === userId);
+  if (!target) throw new Error("Employee not found");
+  if (actor.role === "manager" && !["staff", "chef"].includes(target.role)) {
+    throw new Error("Managers cannot modify Owner or Manager accounts.");
+  }
+  if (actor.role !== "owner" && actor.role !== "manager") {
+    throw new Error("Unauthorized");
+  }
+  if (target.id === actor.userId) {
+    throw new Error("You cannot disable your own account.");
+  }
+  target.is_active = isActive;
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    isActive ? "EMPLOYEE_ENABLED" : "EMPLOYEE_DISABLED",
+    "user",
+    target.id,
+    { full_name: target.full_name, role: target.role }
+  );
+  commitDb();
+  return target;
+}
+
+export function adjustInventory(
+  itemId: string,
+  movementType: "restock" | "deduction" | "wastage" | "adjustment",
+  quantity: number,
+  note: string,
+  actor: SessionPayload
+) {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can modify inventory.");
+  }
+  const item = db.inventory_items.find((i) => i.id === itemId);
+  if (!item) throw new Error("Inventory item not found");
+
+  const delta =
+    movementType === "deduction" || movementType === "wastage"
+      ? -Math.abs(quantity)
+      : movementType === "restock"
+      ? Math.abs(quantity)
+      : quantity;
+
+  item.current_stock = roundMoney(Math.max(0, item.current_stock + delta));
+  item.updated_at = new Date().toISOString();
+
+  db.inventory_movements.unshift({
+    id: crypto.randomUUID(),
+    inventory_item_id: item.id,
+    inventory_item_name: item.name,
+    movement_type: movementType,
+    quantity_delta: delta,
+    note: note.trim() || movementType,
+    actor_id: actor.userId,
+    actor_name: actor.fullName,
+    created_at: new Date().toISOString(),
+  });
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "INVENTORY_ADJUSTED",
+    "inventory_item",
+    item.id,
+    { item: item.name, movement_type: movementType, delta, new_stock: item.current_stock }
+  );
+  commitDb();
+  publishRealtimeEvent({
+    type: "inventory.updated",
+    channel: "restaurant:orders",
+    message: `Inventory updated: ${item.name} (${item.current_stock} ${item.unit})`,
+  });
+  return item;
+}
+
+export function recordExpense(
+  data: { title: string; category: "ingredients" | "utilities" | "staff" | "maintenance" | "marketing" | "other"; amount: number },
+  actor: SessionPayload
+) {
+  const db = getDb();
+  if (actor.role !== "owner" && actor.role !== "manager") {
+    throw new Error("Unauthorized");
+  }
+  const expense = {
+    id: crypto.randomUUID(),
+    title: data.title.trim(),
+    category: data.category,
+    amount: roundMoney(data.amount),
+    expense_date: new Date().toISOString().slice(0, 10),
+    recorded_by: actor.fullName,
+    created_at: new Date().toISOString(),
+  };
+  db.expenses.unshift(expense);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "EXPENSE_RECORDED",
+    "expense",
+    expense.id,
+    { title: expense.title, amount: expense.amount }
+  );
+  commitDb();
+  return expense;
+}
+
+export function updateRestaurantSettings(
+  patch: Partial<RestaurantSettings>,
+  actor: SessionPayload
+): RestaurantSettings {
+  const db = getDb();
+  if (actor.role !== "owner") {
+    throw new Error("Only the Owner can modify restaurant tax & system settings.");
+  }
+  db.settings = {
+    ...db.settings,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "SETTINGS_UPDATED",
+    "restaurant_settings",
+    "1",
+    { changes: patch }
+  );
+  commitDb();
+  return db.settings;
+}

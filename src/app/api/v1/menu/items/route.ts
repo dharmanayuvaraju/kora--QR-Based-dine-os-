@@ -1,0 +1,53 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { requireRole } from "@/lib/auth";
+import { createMenuItem } from "@/lib/db/store";
+
+const Schema = z.object({
+  category_id: z.string().min(1),
+  name: z.string().min(2).max(100),
+  description: z.string().max(300).default(""),
+  price: z.number().min(1),
+  dietary: z.enum(["veg", "non_veg", "vegan", "egg"]).default("veg"),
+  spice_level: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]).default(1),
+  prep_minutes: z.number().int().min(1).max(120).default(15),
+  image_url: z
+    .string()
+    .default("https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=600&q=80"),
+  is_bestseller: z.boolean().default(false),
+  is_available: z.boolean().default(true),
+  variants: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        price_delta: z.number(),
+        is_default: z.boolean().optional(),
+      })
+    )
+    .optional(),
+  addons: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        price: z.number().min(0),
+      })
+    )
+    .optional(),
+});
+
+export async function POST(req: NextRequest) {
+  const auth = await requireRole(["owner", "manager"]);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+  try {
+    const body = Schema.parse(await req.json());
+    const item = createMenuItem(body, auth.session);
+    return NextResponse.json({ item }, { status: 201 });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Could not create item" },
+      { status: 400 }
+    );
+  }
+}
