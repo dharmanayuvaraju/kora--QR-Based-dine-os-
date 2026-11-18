@@ -1,9 +1,11 @@
 -- ============================================================================
 -- KORA Restaurant QR Ordering & Management Platform
 -- Production PostgreSQL / Supabase Migration (18 Core Tables + Settings + RLS)
+-- Hardened per Supabase Security & Performance Advisors
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE SCHEMA IF NOT EXISTS app_private;
 
 -- 1. USERS (Backed by Supabase Auth UUID; no local password_hash stored)
 CREATE TABLE IF NOT EXISTS public.users (
@@ -41,10 +43,11 @@ CREATE TABLE IF NOT EXISTS public.table_sessions (
   closed_by UUID REFERENCES public.users(id)
 );
 
--- Enforce strictly ONE active/payment_pending session per physical table
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_session_per_table
   ON public.table_sessions(table_id)
   WHERE status IN ('active', 'payment_pending');
+CREATE INDEX IF NOT EXISTS idx_table_sessions_table_id ON public.table_sessions(table_id);
+CREATE INDEX IF NOT EXISTS idx_table_sessions_closed_by ON public.table_sessions(closed_by);
 
 -- 4. TABLE_ASSIGNMENTS
 CREATE TABLE IF NOT EXISTS public.table_assignments (
@@ -59,6 +62,8 @@ CREATE TABLE IF NOT EXISTS public.table_assignments (
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_staff_per_table
   ON public.table_assignments(table_id)
   WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_table_assignments_staff_id ON public.table_assignments(staff_id);
+CREATE INDEX IF NOT EXISTS idx_table_assignments_assigned_by ON public.table_assignments(assigned_by);
 
 -- 5. MENU_CATEGORIES
 CREATE TABLE IF NOT EXISTS public.menu_categories (
@@ -87,6 +92,7 @@ CREATE TABLE IF NOT EXISTS public.menu_items (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_menu_items_category_id ON public.menu_items(category_id);
 
 -- 7. MENU_ITEM_VARIANTS
 CREATE TABLE IF NOT EXISTS public.menu_item_variants (
@@ -96,6 +102,7 @@ CREATE TABLE IF NOT EXISTS public.menu_item_variants (
   price_delta NUMERIC(12,2) NOT NULL DEFAULT 0,
   is_default BOOLEAN NOT NULL DEFAULT FALSE
 );
+CREATE INDEX IF NOT EXISTS idx_menu_item_variants_item_id ON public.menu_item_variants(menu_item_id);
 
 -- 8. ORDERS
 CREATE TABLE IF NOT EXISTS public.orders (
@@ -117,8 +124,11 @@ CREATE TABLE IF NOT EXISTS public.orders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_orders_session_id ON public.orders(session_id);
+CREATE INDEX IF NOT EXISTS idx_orders_table_id ON public.orders(table_id);
+CREATE INDEX IF NOT EXISTS idx_orders_approved_by ON public.orders(approved_by);
 
--- 9. ORDER_ITEMS (Preserves historical snapshots even if menu changes)
+-- 9. ORDER_ITEMS
 CREATE TABLE IF NOT EXISTS public.order_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
@@ -137,6 +147,9 @@ CREATE TABLE IF NOT EXISTS public.order_items (
   served_at TIMESTAMPTZ,
   served_by UUID REFERENCES public.users(id)
 );
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON public.order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_menu_item_id ON public.order_items(menu_item_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_served_by ON public.order_items(served_by);
 
 -- 10. ORDER_ITEM_ADDONS
 CREATE TABLE IF NOT EXISTS public.order_item_addons (
@@ -145,6 +158,7 @@ CREATE TABLE IF NOT EXISTS public.order_item_addons (
   addon_name_snapshot TEXT NOT NULL,
   addon_price NUMERIC(12,2) NOT NULL CHECK (addon_price >= 0)
 );
+CREATE INDEX IF NOT EXISTS idx_order_item_addons_item_id ON public.order_item_addons(order_item_id);
 
 -- 11. KITCHEN_TICKETS
 CREATE TABLE IF NOT EXISTS public.kitchen_tickets (
@@ -156,6 +170,9 @@ CREATE TABLE IF NOT EXISTS public.kitchen_tickets (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_kitchen_tickets_order_id ON public.kitchen_tickets(order_id);
+CREATE INDEX IF NOT EXISTS idx_kitchen_tickets_order_item_id ON public.kitchen_tickets(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_kitchen_tickets_chef_id ON public.kitchen_tickets(chef_id);
 
 -- 12. ORDER_STATUS_LOGS
 CREATE TABLE IF NOT EXISTS public.order_status_logs (
@@ -169,6 +186,9 @@ CREATE TABLE IF NOT EXISTS public.order_status_logs (
   reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_order_status_logs_order_id ON public.order_status_logs(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_status_logs_item_id ON public.order_status_logs(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_order_status_logs_actor_id ON public.order_status_logs(actor_id);
 
 -- 13. PAYMENTS
 CREATE TABLE IF NOT EXISTS public.payments (
@@ -186,8 +206,10 @@ CREATE TABLE IF NOT EXISTS public.payments (
   paid_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_payments_session_id ON public.payments(session_id);
+CREATE INDEX IF NOT EXISTS idx_payments_collected_by ON public.payments(collected_by);
 
--- 14. PAYMENT_TRANSACTIONS (Razorpay Gateway Records)
+-- 14. PAYMENT_TRANSACTIONS
 CREATE TABLE IF NOT EXISTS public.payment_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   payment_id UUID NOT NULL REFERENCES public.payments(id) ON DELETE CASCADE,
@@ -200,6 +222,7 @@ CREATE TABLE IF NOT EXISTS public.payment_transactions (
   raw_payload JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_payment_id ON public.payment_transactions(payment_id);
 
 -- 15. REFUNDS
 CREATE TABLE IF NOT EXISTS public.refunds (
@@ -211,6 +234,8 @@ CREATE TABLE IF NOT EXISTS public.refunds (
   authorized_by UUID NOT NULL REFERENCES public.users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_refunds_payment_id ON public.refunds(payment_id);
+CREATE INDEX IF NOT EXISTS idx_refunds_authorized_by ON public.refunds(authorized_by);
 
 -- 16. INVENTORY_ITEMS
 CREATE TABLE IF NOT EXISTS public.inventory_items (
@@ -233,6 +258,8 @@ CREATE TABLE IF NOT EXISTS public.inventory_movements (
   actor_id UUID REFERENCES public.users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_item_id ON public.inventory_movements(inventory_item_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_actor_id ON public.inventory_movements(actor_id);
 
 -- 18. AUDIT_LOGS
 CREATE TABLE IF NOT EXISTS public.audit_logs (
@@ -246,6 +273,7 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
   metadata JSONB DEFAULT '{}'::JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_id ON public.audit_logs(actor_id);
 
 -- Supporting Tables: RESTAURANT_SETTINGS & EXPENSES
 CREATE TABLE IF NOT EXISTS public.restaurant_settings (
@@ -269,38 +297,7 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   recorded_by UUID REFERENCES public.users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- ============================================================================
--- ROW LEVEL SECURITY (RLS) POLICIES
--- ============================================================================
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.restaurant_tables ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.table_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
-
--- Helper function to fetch authenticated user's role
-CREATE OR REPLACE FUNCTION public.current_user_role()
-RETURNS TEXT LANGUAGE sql SECURITY DEFINER STABLE AS $$
-  SELECT role FROM public.users WHERE id = auth.uid() AND is_active = TRUE;
-$$;
-
--- Public read access for active menu
-CREATE POLICY "Public read active categories" ON public.menu_categories
-  FOR SELECT USING (is_active = TRUE);
-
--- Owners & Managers manage users; employees can read their own profile
-CREATE POLICY "Employees read own profile" ON public.users
-  FOR SELECT USING (id = auth.uid() OR public.current_user_role() IN ('owner', 'manager'));
-
--- Chefs CANNOT access financial payments or audit logs
-CREATE POLICY "Non-chef authorized read payments" ON public.payments
-  FOR SELECT USING (public.current_user_role() IN ('owner', 'manager', 'staff'));
-
-CREATE POLICY "Owner and manager read audit logs" ON public.audit_logs
-  FOR SELECT USING (public.current_user_role() IN ('owner', 'manager'));
+CREATE INDEX IF NOT EXISTS idx_expenses_recorded_by ON public.expenses(recorded_by);
 
 -- Server-managed transactional state store (RLS locked: service_role only)
 CREATE TABLE IF NOT EXISTS public.kora_app_state (
@@ -309,9 +306,6 @@ CREATE TABLE IF NOT EXISTS public.kora_app_state (
   payload JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-ALTER TABLE public.kora_app_state ENABLE ROW LEVEL SECURITY;
--- Intentionally NO anon/authenticated policies: only SUPABASE_SERVICE_ROLE_KEY can access.
 
 -- Lightweight Realtime Event Stream for cross-device / serverless live updates
 CREATE TABLE IF NOT EXISTS public.kora_realtime_events (
@@ -325,11 +319,83 @@ CREATE TABLE IF NOT EXISTS public.kora_realtime_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ============================================================================
+-- ROW LEVEL SECURITY (ENABLED ON ALL EXPOSED PUBLIC TABLES)
+-- ============================================================================
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restaurant_tables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.table_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.table_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_item_variants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_item_addons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kitchen_tickets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_status_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payment_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.refunds ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restaurant_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kora_app_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.kora_realtime_events ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Public subscribe realtime events" ON public.kora_realtime_events;
+-- Private schema helper function (never exposed in public Data API)
+CREATE OR REPLACE FUNCTION app_private.current_user_role()
+RETURNS TEXT
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = ''
+AS $$
+  SELECT role FROM public.users WHERE id = (SELECT auth.uid()) AND is_active = TRUE;
+$$;
+
+REVOKE ALL ON FUNCTION app_private.current_user_role() FROM PUBLIC;
+GRANT USAGE ON SCHEMA app_private TO authenticated;
+GRANT EXECUTE ON FUNCTION app_private.current_user_role() TO authenticated;
+
+-- Public read access for active menu catalog
+CREATE POLICY "Public read active categories" ON public.menu_categories
+  FOR SELECT TO anon, authenticated
+  USING (is_active = TRUE);
+
+CREATE POLICY "Public read active menu items" ON public.menu_items
+  FOR SELECT TO anon, authenticated
+  USING (deleted_at IS NULL);
+
+CREATE POLICY "Public read menu item variants" ON public.menu_item_variants
+  FOR SELECT TO anon, authenticated
+  USING (TRUE);
+
+CREATE POLICY "Public read restaurant settings" ON public.restaurant_settings
+  FOR SELECT TO anon, authenticated
+  USING (TRUE);
+
+-- Employees read own profile; Owner/Manager read all
+CREATE POLICY "Employees read own profile" ON public.users
+  FOR SELECT TO authenticated
+  USING (id = (SELECT auth.uid()) OR app_private.current_user_role() IN ('owner', 'manager'));
+
+-- Chefs CANNOT access financial payments or audit logs
+CREATE POLICY "Non-chef authorized read payments" ON public.payments
+  FOR SELECT TO authenticated
+  USING (app_private.current_user_role() IN ('owner', 'manager', 'staff'));
+
+CREATE POLICY "Owner and manager read audit logs" ON public.audit_logs
+  FOR SELECT TO authenticated
+  USING (app_private.current_user_role() IN ('owner', 'manager'));
+
+-- Realtime notification feed (non-sensitive event pings only; writes via service_role)
+GRANT SELECT ON public.kora_realtime_events TO anon, authenticated;
 CREATE POLICY "Public subscribe realtime events" ON public.kora_realtime_events
-  FOR SELECT USING (TRUE);
+  FOR SELECT TO anon, authenticated
+  USING (TRUE);
 
 -- Enable Supabase Realtime publications
 ALTER PUBLICATION supabase_realtime ADD TABLE
