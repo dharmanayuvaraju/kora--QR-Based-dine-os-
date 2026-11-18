@@ -11,6 +11,7 @@ import { getSupabaseAdminClient } from "../supabase";
 import { verifyRazorpaySignature, type SessionPayload } from "../auth";
 import type {
   DatabaseState,
+  LowStockFlag,
   MenuCategory,
   MenuItem,
   Order,
@@ -60,6 +61,14 @@ function healLegacyState(state: DatabaseState): boolean {
       item.image_url = fixed;
       changed = true;
     }
+    if (typeof item.stock_count !== "number" || !Number.isFinite(item.stock_count)) {
+      item.stock_count = item.is_available ? 20 : 0;
+      changed = true;
+    }
+  }
+  if (!Array.isArray(state.low_stock_flags)) {
+    state.low_stock_flags = [];
+    changed = true;
   }
   for (const p of state.payments) {
     if (p.collected_by_name === "Razorpay UPI") {
@@ -151,43 +160,53 @@ export async function ensureDbReady(): Promise<DatabaseState> {
     return getDb();
   }
 
-  try {
-    const { data, error } = await supabase
+  let res = await supabase
+    .from("kora_app_state")
+    .select("version, payload")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (res.error) {
+    await new Promise((r) => setTimeout(r, 150));
+    res = await supabase
       .from("kora_app_state")
       .select("version, payload")
       .eq("id", 1)
       .maybeSingle();
+  }
 
-    if (error) {
-      console.warn("[KORA Supabase] Read error, falling back to local cache:", error.message);
-      return getDb();
-    }
-
-    if (data && data.payload && Array.isArray((data.payload as DatabaseState).restaurant_tables)) {
-      const loaded = data.payload as DatabaseState;
-      const healed = healLegacyState(loaded);
-      globalThis.__koraDbState = loaded;
-      globalThis.__koraDbVersion = Number(data.version ?? 1);
-      globalThis.__koraDbDirty = healed;
+  if (res.error) {
+    console.error("[KORA Supabase] Read error (never reseeding on error):", res.error.message);
+    if (globalThis.__koraDbState) {
       return globalThis.__koraDbState;
     }
-
-    // First-time Supabase initialization: seed & persist immediately
-    const seeded = createSeedState();
-    globalThis.__koraDbState = seeded;
-    globalThis.__koraDbVersion = 1;
-    globalThis.__koraDbDirty = false;
-    await supabase.from("kora_app_state").upsert({
-      id: 1,
-      version: 1,
-      payload: seeded,
-      updated_at: new Date().toISOString(),
-    });
-    return seeded;
-  } catch (err) {
-    console.warn("[KORA Supabase] ensureDbReady fallback:", err);
-    return getDb();
+    throw new Error(`Database read failed: ${res.error.message}`);
   }
+
+  if (res.data && res.data.payload && Array.isArray((res.data.payload as DatabaseState).restaurant_tables)) {
+    const loaded = res.data.payload as DatabaseState;
+    const healed = healLegacyState(loaded);
+    globalThis.__koraDbState = loaded;
+    globalThis.__koraDbVersion = Number(res.data.version ?? 1);
+    globalThis.__koraDbDirty = healed;
+    return globalThis.__koraDbState;
+  }
+
+  // First-time Supabase initialization (table genuinely has 0 rows): seed & persist immediately
+  const seeded = createSeedState();
+  globalThis.__koraDbState = seeded;
+  globalThis.__koraDbVersion = 1;
+  globalThis.__koraDbDirty = false;
+  const { error: seedErr } = await supabase.from("kora_app_state").upsert({
+    id: 1,
+    version: 1,
+    payload: seeded,
+    updated_at: new Date().toISOString(),
+  });
+  if (seedErr) {
+    console.error("[KORA Supabase] Initial seed persist error:", seedErr.message);
+  }
+  return seeded;
 }
 
 export function getDb(): DatabaseState {
@@ -214,14 +233,21 @@ export async function flushDb(): Promise<void> {
 
   if (globalThis.__koraDbDirty && globalThis.__koraDbState) {
     const nextVersion = (globalThis.__koraDbVersion ?? 1) + 1;
-    const { error } = await supabase.from("kora_app_state").upsert({
+    const row = {
       id: 1,
       version: nextVersion,
       payload: globalThis.__koraDbState,
       updated_at: new Date().toISOString(),
-    });
+    };
+    let { error } = await supabase.from("kora_app_state").upsert(row);
     if (error) {
-      console.error("[KORA Supabase] Persist error:", error.message);
+      await new Promise((r) => setTimeout(r, 150));
+      const retry = await supabase.from("kora_app_state").upsert(row);
+      error = retry.error;
+    }
+    if (error) {
+      console.error("[KORA Supabase] Persist error after retry:", error.message);
+      throw new Error(`Database persist failed: ${error.message}`);
     } else {
       globalThis.__koraDbVersion = nextVersion;
       globalThis.__koraDbDirty = false;
@@ -545,8 +571,8 @@ export function createCustomerOrder(
       (m) => m.id === input.menu_item_id && !m.deleted_at
     );
     if (!menuItem) throw new Error("One of the selected menu items no longer exists.");
-    if (!menuItem.is_available) {
-      throw new Error(`"${menuItem.name}" is currently unavailable.`);
+    if (!menuItem.is_available || (typeof menuItem.stock_count === "number" && menuItem.stock_count <= 0)) {
+      throw new Error(`"${menuItem.name}" is currently sold out.`);
     }
 
     let variantName: string | null = null;
@@ -671,6 +697,7 @@ export function acceptOrderByChef(orderId: string, actor: SessionPayload): Order
   order.approved_by = actor.userId;
   order.updated_at = nowIso;
 
+  let stockBecameZero = false;
   for (const item of order.items) {
     if (item.status === "pending_approval") {
       item.status = "accepted";
@@ -683,7 +710,31 @@ export function acceptOrderByChef(orderId: string, actor: SessionPayload): Order
         created_at: nowIso,
         updated_at: nowIso,
       });
+
+      // Auto-decrement dish stock count on acceptance; auto-mark Sold Out at 0
+      const menuItem = db.menu_items.find((m) => m.id === item.menu_item_id && !m.deleted_at);
+      if (menuItem) {
+        const nextCount = Math.max(0, (menuItem.stock_count ?? 0) - item.quantity);
+        menuItem.stock_count = nextCount;
+        if (nextCount === 0 && menuItem.is_available) {
+          menuItem.is_available = false;
+          stockBecameZero = true;
+        }
+        for (const flag of db.low_stock_flags) {
+          if (flag.menu_item_id === menuItem.id && flag.status === "open") {
+            flag.current_stock_count = nextCount;
+          }
+        }
+      }
     }
+  }
+
+  if (stockBecameZero) {
+    publishRealtimeEvent({
+      type: "menu.updated",
+      channel: "restaurant:orders",
+      message: "One or more dishes reached 0 stock and were marked Sold Out automatically",
+    });
   }
 
   logOrderStatus(
@@ -1498,8 +1549,140 @@ export function toggleMenuItemAvailability(
   return item;
 }
 
+export function updateMenuItemStock(
+  itemId: string,
+  input: { stock_count?: number; delta?: number },
+  actor: SessionPayload
+): MenuItem {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can update dish stock counts.");
+  }
+  const item = db.menu_items.find((m) => m.id === itemId && !m.deleted_at);
+  if (!item) throw new Error("Menu item not found");
+
+  const prevCount = item.stock_count ?? 0;
+  const nextCount =
+    typeof input.stock_count === "number"
+      ? Math.max(0, Math.floor(input.stock_count))
+      : Math.max(0, Math.floor(prevCount + (input.delta ?? 0)));
+
+  item.stock_count = nextCount;
+  if (nextCount === 0) {
+    item.is_available = false;
+  } else if (nextCount > 0 && !item.is_available) {
+    item.is_available = true;
+  }
+
+  for (const flag of db.low_stock_flags) {
+    if (flag.menu_item_id === item.id && flag.status === "open") {
+      flag.current_stock_count = nextCount;
+    }
+  }
+
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "MENU_ITEM_STOCK_UPDATED",
+    "menu_item",
+    item.id,
+    { item: item.name, previous_stock: prevCount, new_stock: nextCount, is_available: item.is_available }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "menu.updated",
+    channel: "restaurant:orders",
+    message: `${item.name} stock updated to ${nextCount} (${item.is_available ? "Available" : "Sold Out"})`,
+  });
+
+  return item;
+}
+
+export function flagDishLowStock(
+  menuItemId: string,
+  note: string,
+  actor: SessionPayload
+): LowStockFlag {
+  const db = getDb();
+  if (actor.role !== "chef") {
+    throw new Error("Only the Chef can submit kitchen low-stock flags.");
+  }
+  const item = db.menu_items.find((m) => m.id === menuItemId && !m.deleted_at);
+  if (!item) throw new Error("Menu item not found");
+
+  const cleanNote = note.trim() || "Running low on kitchen line";
+  const flag: LowStockFlag = {
+    id: crypto.randomUUID(),
+    menu_item_id: item.id,
+    menu_item_name: item.name,
+    current_stock_count: item.stock_count ?? 0,
+    note: cleanNote,
+    flagged_by_id: actor.userId,
+    flagged_by_name: actor.fullName,
+    status: "open",
+    created_at: new Date().toISOString(),
+    resolved_at: null,
+    resolved_by_name: null,
+  };
+
+  db.low_stock_flags.unshift(flag);
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "DISH_LOW_STOCK_FLAGGED",
+    "menu_item",
+    item.id,
+    { item: item.name, stock_count: flag.current_stock_count, note: cleanNote }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "inventory.updated",
+    channel: "restaurant:orders",
+    message: `Chef flagged low stock: ${item.name} (${cleanNote})`,
+  });
+
+  return flag;
+}
+
+export function resolveLowStockFlag(
+  flagId: string,
+  actor: SessionPayload
+): LowStockFlag {
+  const db = getDb();
+  if (!["owner", "manager"].includes(actor.role)) {
+    throw new Error("Only Owner or Manager can resolve low-stock flags.");
+  }
+  const flag = db.low_stock_flags.find((f) => f.id === flagId);
+  if (!flag) throw new Error("Low-stock flag not found");
+
+  flag.status = "resolved";
+  flag.resolved_at = new Date().toISOString();
+  flag.resolved_by_name = actor.fullName;
+
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "DISH_LOW_STOCK_FLAG_RESOLVED",
+    "low_stock_flag",
+    flag.id,
+    { item: flag.menu_item_name }
+  );
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "inventory.updated",
+    channel: "restaurant:orders",
+    message: `Low-stock flag resolved for ${flag.menu_item_name}`,
+  });
+
+  return flag;
+}
+
 export function createMenuItem(
-  data: Omit<MenuItem, "id" | "deleted_at" | "variants" | "addons"> & {
+  data: Omit<MenuItem, "id" | "deleted_at" | "variants" | "addons" | "stock_count"> & {
+    stock_count?: number;
     variants?: Array<{ name: string; price_delta: number; is_default?: boolean }>;
     addons?: Array<{ name: string; price: number }>;
   },
@@ -1510,9 +1693,17 @@ export function createMenuItem(
     throw new Error("Only Owner or Manager can create menu items.");
   }
   const id = crypto.randomUUID();
+  const initialStock =
+    typeof data.stock_count === "number"
+      ? Math.max(0, Math.floor(data.stock_count))
+      : data.is_available
+      ? 20
+      : 0;
   const item: MenuItem = {
     ...data,
     id,
+    stock_count: initialStock,
+    is_available: initialStock > 0 ? data.is_available : false,
     deleted_at: null,
     variants: (data.variants ?? []).map((v, idx) => ({
       id: crypto.randomUUID(),

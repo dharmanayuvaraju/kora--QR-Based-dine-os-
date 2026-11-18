@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedSession } from "@/lib/auth";
 import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
-import { isSupabaseConfigured } from "@/lib/supabase";
+import {
+  isSupabaseConfigured,
+  isSupabaseServerPersistenceConfigured,
+} from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +61,9 @@ export async function GET() {
       {
         restaurant: db.settings,
         mode: isSupabaseConfigured() ? "supabase" : "dual-mode-local",
+        storage_mode: isSupabaseServerPersistenceConfigured()
+          ? "supabase-postgres"
+          : "local-ephemeral",
         authenticated: Boolean(currentUser),
         current_role: currentUser?.role ?? null,
         stats: {

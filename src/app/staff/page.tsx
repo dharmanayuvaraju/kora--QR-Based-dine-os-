@@ -271,7 +271,7 @@ function StaffWorkspace({
               <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-12 text-center">
                 <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500/70" />
                 <p className="mt-3 text-sm font-semibold text-stone-800">
-                  Kitchen pass is clear — all ready dishes have been served!
+                  Kitchen pass is clear. All ready dishes have been served.
                 </p>
                 <p className="mt-1 text-xs text-stone-500">
                   You will receive an instant chime and card here the moment a chef marks any

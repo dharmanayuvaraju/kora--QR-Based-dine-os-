@@ -11,13 +11,13 @@ import {
   Menu,
   Store,
   UserCheck,
-  UtensilsCrossed,
   Volume2,
   VolumeX,
   Wifi,
   WifiOff,
   X,
 } from "lucide-react";
+import { KoraMark } from "@/components/KoraMark";
 import type { User, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -62,10 +62,10 @@ export function ConsoleHeader({
     <>
       <header
         className={cn(
-          "sticky top-0 z-30 border-b backdrop-blur-md",
+          "sticky top-0 z-30 border-b",
           isDark
-            ? "border-zinc-800/90 bg-[#0C0E12]/90 text-zinc-100"
-            : "border-stone-200/90 bg-white/90 text-stone-900"
+            ? "border-zinc-800/90 bg-[#0C0E12] text-zinc-100"
+            : "border-stone-200/90 bg-white text-stone-900"
         )}
       >
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-4 py-2.5 sm:px-6">
@@ -74,7 +74,7 @@ export function ConsoleHeader({
               type="button"
               onClick={() => setMenuOpen((o) => !o)}
               className={cn(
-                "inline-flex items-center justify-center rounded-lg border p-1.5 lg:hidden",
+                "inline-flex h-10 w-10 items-center justify-center rounded-lg border lg:hidden",
                 isDark
                   ? "border-zinc-800 bg-zinc-900 text-zinc-200 hover:border-zinc-700"
                   : "border-stone-200 bg-white text-stone-700 hover:bg-stone-100"
@@ -82,13 +82,11 @@ export function ConsoleHeader({
               aria-label="Toggle navigation menu"
               aria-expanded={menuOpen}
             >
-              {menuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+              {menuOpen ? <X className="h-4 w-4" strokeWidth={1.75} /> : <Menu className="h-4 w-4" strokeWidth={1.75} />}
             </button>
 
             <Link href="/" className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#C2410C] text-white shadow-xs">
-                <UtensilsCrossed className="h-4 w-4" />
-              </span>
+              <KoraMark className="h-8 w-8" />
               <div className="leading-tight">
                 <span className="font-serif text-base font-semibold tracking-tight">
                   KORA
@@ -286,10 +284,10 @@ export function ConsoleHeader({
       <nav
         aria-label="Mobile console navigation"
         className={cn(
-          "fixed inset-x-0 bottom-0 z-30 border-t backdrop-blur-md lg:hidden",
+          "fixed inset-x-0 bottom-0 z-30 border-t lg:hidden",
           isDark
-            ? "border-zinc-800 bg-[#0C0E12]/95 text-zinc-300"
-            : "border-stone-200 bg-white/95 text-stone-600"
+            ? "border-zinc-800 bg-[#0C0E12] text-zinc-300"
+            : "border-stone-200 bg-white text-stone-600"
         )}
       >
         <div className="grid grid-cols-5">

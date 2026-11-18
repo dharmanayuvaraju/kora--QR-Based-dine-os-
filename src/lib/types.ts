@@ -116,9 +116,24 @@ export interface MenuItem {
   image_url: string;
   is_bestseller: boolean;
   is_available: boolean;
+  stock_count: number;
   deleted_at: string | null;
   variants: MenuItemVariant[];
   addons: MenuItemAddonOption[];
+}
+
+export interface LowStockFlag {
+  id: string;
+  menu_item_id: string;
+  menu_item_name: string;
+  current_stock_count: number;
+  note: string;
+  flagged_by_id: string;
+  flagged_by_name: string;
+  status: "open" | "resolved";
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by_name: string | null;
 }
 
 export interface OrderItemAddon {
@@ -357,6 +372,7 @@ export interface DatabaseState {
   refunds: Refund[];
   inventory_items: InventoryItem[];
   inventory_movements: InventoryMovement[];
+  low_stock_flags: LowStockFlag[];
   expenses: Expense[];
   audit_logs: AuditLog[];
 }

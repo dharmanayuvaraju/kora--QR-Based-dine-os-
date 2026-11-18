@@ -26,16 +26,21 @@ export async function GET() {
   const inventory_low = db.inventory_items.filter(
     (i) => i.current_stock <= i.reorder_level
   );
+  const low_stock_flags = db.low_stock_flags.filter((f) => f.status === "open");
 
-  return NextResponse.json({
-    pending,
-    preparing,
-    ready,
-    rejected,
-    history,
-    menu_items,
-    inventory_low,
-  });
+  return NextResponse.json(
+    {
+      pending,
+      preparing,
+      ready,
+      rejected,
+      history,
+      menu_items,
+      inventory_low,
+      low_stock_flags,
+    },
+    { headers: { "Cache-Control": "no-store, max-age=0" } }
+  );
   } finally {
     await flushDb();
   }

@@ -11,8 +11,8 @@ import {
   Mail,
   ShieldAlert,
   ShieldCheck,
-  UtensilsCrossed,
 } from "lucide-react";
+import { KoraMark } from "@/components/KoraMark";
 import type { User, UserRole } from "@/lib/types";
 
 interface RoleAuthGateProps {
@@ -126,9 +126,7 @@ export function RoleAuthGate({
         >
           <div className="mb-6 flex items-center justify-between gap-2">
             <Link href="/" className="flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#C2410C] text-white">
-                <UtensilsCrossed className="h-4 w-4" />
-              </span>
+              <KoraMark className="h-9 w-9" />
               <div>
                 <p className="font-serif text-lg font-semibold leading-none tracking-tight">
                   KORA OS

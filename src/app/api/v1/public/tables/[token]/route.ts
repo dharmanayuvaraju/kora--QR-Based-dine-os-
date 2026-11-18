@@ -9,6 +9,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const RECENT_CLOSED_WINDOW_MS = 30 * 60_000; // 30 minutes
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ token: string }> }
@@ -30,29 +32,61 @@ export async function GET(
       );
     }
 
-    // If customer reloads right after paying, preserve their paid session & receipt
     const preserveSessionId = req.nextUrl.searchParams.get("session_id");
     const forceNew = req.nextUrl.searchParams.get("new") === "1";
 
-    if (preserveSessionId && !forceNew) {
-      const existingActive = db.table_sessions.find(
-        (s) =>
-          s.table_id === table.id &&
-          (s.status === "active" || s.status === "payment_pending")
+    // Priority 1: Existing active or payment_pending session always takes precedence
+    const existingActive = db.table_sessions.find(
+      (s) =>
+        s.table_id === table.id &&
+        (s.status === "active" || s.status === "payment_pending")
+    );
+    if (existingActive) {
+      const bill = getSessionBillSummary(existingActive.id);
+      return NextResponse.json(
+        {
+          table,
+          session: existingActive,
+          created_new_session: false,
+          bill,
+          settings: db.settings,
+        },
+        { headers: { "Cache-Control": "no-store, max-age=0" } }
       );
-      if (!existingActive) {
-        const closedSession = db.table_sessions.find(
-          (s) =>
-            s.id === preserveSessionId &&
-            s.table_id === table.id &&
-            s.status === "closed"
-        );
-        if (closedSession) {
-          const bill = getSessionBillSummary(closedSession.id);
+    }
+
+    // Priority 2 & 3: Preserve recently paid/closed session so reloading or reopening
+    // the table link keeps completed orders and the paid GST invoice visible
+    if (!forceNew) {
+      let closedToKeep = preserveSessionId
+        ? db.table_sessions.find(
+            (s) =>
+              s.id === preserveSessionId &&
+              s.table_id === table.id &&
+              s.status === "closed"
+          )
+        : undefined;
+
+      if (!closedToKeep) {
+        const now = Date.now();
+        closedToKeep = db.table_sessions
+          .filter(
+            (s) =>
+              s.table_id === table.id &&
+              s.status === "closed" &&
+              s.closed_at &&
+              now - new Date(s.closed_at).getTime() <= RECENT_CLOSED_WINDOW_MS
+          )
+          .sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? ""))[0];
+      }
+
+      if (closedToKeep) {
+        const bill = getSessionBillSummary(closedToKeep.id);
+        if (bill.orders.length > 0 || bill.payments.length > 0) {
           return NextResponse.json(
             {
               table,
-              session: closedSession,
+              session: closedToKeep,
               created_new_session: false,
               bill,
               settings: db.settings,
@@ -63,6 +97,7 @@ export async function GET(
       }
     }
 
+    // Priority 4: Start a new dining session for this table
     const resolved = resolveTableByQrToken(token);
     if (!resolved) {
       return NextResponse.json(

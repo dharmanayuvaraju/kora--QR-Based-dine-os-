@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
+import { isSupabaseServerPersistenceConfigured } from "@/lib/supabase";
 import { getDb, getSessionBillSummary, recordExpense, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export const dynamic = "force-dynamic";
@@ -107,7 +108,13 @@ export async function GET() {
       low_stock_count: db.inventory_items.filter(
         (i) => i.current_stock <= i.reorder_level
       ).length,
+      open_low_stock_flags_count: db.low_stock_flags.filter(
+        (f) => f.status === "open"
+      ).length,
     },
+    storage_mode: isSupabaseServerPersistenceConfigured()
+      ? "supabase-postgres"
+      : "local-ephemeral",
     top_dishes: topDishes,
     tables,
     orders: db.orders,
@@ -118,9 +125,10 @@ export async function GET() {
     users: db.users,
     inventory_items: db.inventory_items,
     inventory_movements: db.inventory_movements.slice(0, 30),
+    low_stock_flags: db.low_stock_flags,
     expenses: isOwner ? db.expenses : [],
     audit_logs: db.audit_logs.slice(0, 80),
-  });
+  }, { headers: { "Cache-Control": "no-store, max-age=0" } });
   } finally {
     await flushDb();
   }

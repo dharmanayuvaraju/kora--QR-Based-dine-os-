@@ -1,18 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
-  Check,
   CheckCircle2,
   Clock,
-  CreditCard,
   Flame,
   Minus,
   Plus,
-  Printer,
   Receipt,
   RefreshCw,
   Search,
@@ -20,11 +18,14 @@ import {
   Smartphone,
   Sparkles,
   Store,
-  UtensilsCrossed,
   X,
+  Zap,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/useRealtime";
+import { useMotionPreference } from "@/hooks/useMotionPreference";
 import { DietaryMark } from "@/components/DietaryMark";
+import { DishImage } from "@/components/DishImage";
+import { KoraMark } from "@/components/KoraMark";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatCurrency, formatTimeShort } from "@/lib/utils";
 import { playChime } from "@/lib/sound";
@@ -38,6 +39,15 @@ import type {
   TableSession,
 } from "@/lib/types";
 
+const DemoPaymentModal = dynamic(
+  () => import("@/components/CustomerPaymentModals").then((m) => m.DemoPaymentModal),
+  { ssr: false }
+);
+const PaidReceiptModal = dynamic(
+  () => import("@/components/CustomerPaymentModals").then((m) => m.PaidReceiptModal),
+  { ssr: false }
+);
+
 interface CartEntry {
   key: string;
   menu_item: MenuItem;
@@ -50,7 +60,154 @@ interface CartEntry {
   instructions: string;
 }
 
+interface DishCardProps {
+  item: MenuItem;
+  qtyInCart: number;
+  sessionClosed: boolean;
+  priority: boolean;
+  reducedMotion: boolean;
+  onQuickAdd: (item: MenuItem, el: HTMLElement | null) => void;
+  onCustomize: (item: MenuItem) => void;
+}
+
+const DishCard = memo(function DishCard({
+  item,
+  qtyInCart,
+  sessionClosed,
+  priority,
+  reducedMotion,
+  onQuickAdd,
+  onCustomize,
+}: DishCardProps) {
+  const cardRef = useRef<HTMLElement | null>(null);
+  const imgWrapRef = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(priority || reducedMotion);
+
+  useEffect(() => {
+    if (visible || reducedMotion) {
+      setVisible(true);
+      return;
+    }
+    const el = cardRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisible(true);
+          obs.disconnect();
+        }
+      },
+      { rootMargin: "40px 0px" }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [visible, reducedMotion]);
+
+  const isOutOfStock = !item.is_available || (typeof item.stock_count === "number" && item.stock_count <= 0);
+  const isLowCount = !isOutOfStock && typeof item.stock_count === "number" && item.stock_count > 0 && item.stock_count <= 4;
+
+  return (
+    <article
+      ref={cardRef}
+      className={`flex gap-3.5 rounded-2xl border border-[#EAE2D7] bg-white p-3.5 transition-opacity duration-200 ${
+        visible ? (reducedMotion ? "opacity-100" : "kora-card-enter opacity-100") : "opacity-0"
+      } ${isOutOfStock ? "opacity-65 grayscale-[30%]" : ""}`}
+    >
+      <div className="flex min-w-0 flex-1 flex-col justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <DietaryMark dietary={item.dietary} />
+            {item.is_bestseller && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                <Sparkles className="h-2.5 w-2.5" strokeWidth={1.8} /> Chef&apos;s Pick
+              </span>
+            )}
+            {item.spice_level >= 2 && (
+              <span
+                className="inline-flex items-center text-orange-600"
+                title={`Spice level ${item.spice_level}/3`}
+              >
+                {Array.from({ length: item.spice_level }).map((_, idx) => (
+                  <Flame key={idx} className="h-3 w-3 fill-orange-500" strokeWidth={1.5} />
+                ))}
+              </span>
+            )}
+            {isLowCount && (
+              <span className="rounded-md bg-orange-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#C2410C]">
+                Only {item.stock_count} left
+              </span>
+            )}
+          </div>
+
+          <h3 className="mt-1.5 font-serif text-base font-semibold leading-snug text-stone-900">
+            {item.name}
+          </h3>
+          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-stone-500">
+            {item.description}
+          </p>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-sm font-semibold tabular-nums text-stone-900">
+              {formatCurrency(item.price)}
+            </span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-stone-400">
+              <Clock className="h-3 w-3" strokeWidth={1.65} /> {item.prep_minutes}m
+            </span>
+          </div>
+
+          {isOutOfStock ? (
+            <span className="inline-flex min-h-[40px] items-center rounded-xl bg-stone-100 px-3 text-xs font-semibold text-stone-500">
+              Sold Out
+            </span>
+          ) : sessionClosed ? (
+            <span className="text-xs text-stone-400">Session Closed</span>
+          ) : (
+            <div className="flex items-center gap-2">
+              {(item.variants.length > 0 || item.addons.length > 0) && (
+                <button
+                  type="button"
+                  onClick={() => onCustomize(item)}
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-stone-200 px-3.5 text-xs font-medium text-stone-700 transition hover:bg-stone-50 active:scale-[0.98]"
+                >
+                  Customize
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onQuickAdd(item, imgWrapRef.current)}
+                className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center gap-1 rounded-xl bg-[#1C1917] px-4 text-xs font-semibold text-white transition hover:bg-[#C2410C] active:scale-[0.98]"
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                Add{qtyInCart > 0 ? ` (${qtyInCart})` : ""}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div
+        ref={imgWrapRef}
+        className="h-24 w-24 shrink-0 overflow-hidden rounded-xl sm:h-28 sm:w-28"
+      >
+        <DishImage
+          src={item.image_url}
+          alt={item.name}
+          variant="thumb"
+          priority={priority}
+          className="h-full w-full"
+        />
+      </div>
+    </article>
+  );
+});
+
 export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
+  const { reducedMotion, toggleReducedMotion } = useMotionPreference();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [table, setTable] = useState<RestaurantTable | null>(null);
@@ -61,7 +218,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   const [items, setItems] = useState<MenuItem[]>([]);
 
   const [activeTab, setActiveTab] = useState<"menu" | "orders" | "bill">("menu");
-  const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [activeScrollCategory, setActiveScrollCategory] = useState<string>("all");
   const [dietFilter, setDietFilter] = useState<"all" | "veg" | "non_veg" | "vegan" | "bestseller">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -85,11 +242,62 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   const [upiId, setUpiId] = useState("guest@okaxis");
   const [processingPay, setProcessingPay] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [celebratePay, setCelebratePay] = useState(false);
+
+  const trayButtonRef = useRef<HTMLButtonElement | null>(null);
+  const categoryBarRef = useRef<HTMLDivElement | null>(null);
 
   const showToast = useCallback((text: string, tone: "ok" | "warn" | "err" = "ok") => {
     setToast({ text, tone });
-    setTimeout(() => setToast((prev) => (prev?.text === text ? null : prev)), 4500);
+    setTimeout(() => setToast((prev) => (prev?.text === text ? null : prev)), 4000);
   }, []);
+
+  // Fly thumbnail to bottom tray using Web Animations API (GPU transform + opacity only)
+  const launchFlyToTray = useCallback(
+    (sourceEl: HTMLElement | null, imgSrc: string) => {
+      if (reducedMotion || !sourceEl || typeof window === "undefined") return;
+      const targetRect = trayButtonRef.current?.getBoundingClientRect() ?? {
+        left: window.innerWidth / 2 - 20,
+        top: window.innerHeight - 56,
+        width: 40,
+        height: 40,
+      };
+      const startRect = sourceEl.getBoundingClientRect();
+      const thumbUrl =
+        imgSrc.startsWith("/dishes/") && imgSrc.endsWith(".jpg")
+          ? `${imgSrc.slice(0, -4)}-thumb.webp`
+          : imgSrc;
+
+      const ghost = document.createElement("img");
+      ghost.src = thumbUrl;
+      ghost.alt = "";
+      ghost.style.position = "fixed";
+      ghost.style.left = `${startRect.left}px`;
+      ghost.style.top = `${startRect.top}px`;
+      ghost.style.width = `${startRect.width}px`;
+      ghost.style.height = `${startRect.height}px`;
+      ghost.style.borderRadius = "12px";
+      ghost.style.objectFit = "cover";
+      ghost.style.pointerEvents = "none";
+      ghost.style.zIndex = "60";
+      ghost.style.willChange = "transform, opacity";
+      document.body.appendChild(ghost);
+
+      const dx = targetRect.left + targetRect.width / 2 - (startRect.left + startRect.width / 2);
+      const dy = targetRect.top + targetRect.height / 2 - (startRect.top + startRect.height / 2);
+
+      const anim = ghost.animate(
+        [
+          { transform: "translate3d(0, 0, 0) scale(1)", opacity: 0.95 },
+          { transform: `translate3d(${dx}px, ${dy}px, 0) scale(0.28)`, opacity: 0.15 },
+        ],
+        { duration: 280, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" }
+      );
+      anim.onfinish = () => ghost.remove();
+      anim.oncancel = () => ghost.remove();
+    },
+    [reducedMotion]
+  );
 
   const refreshMenuOnly = useCallback(async () => {
     try {
@@ -114,9 +322,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         let savedSessionId: string | null = null;
         if (typeof window !== "undefined") {
           if (forceNew) {
-            window.sessionStorage.removeItem(storageKey);
+            window.localStorage.removeItem(storageKey);
           } else {
-            savedSessionId = window.sessionStorage.getItem(storageKey);
+            savedSessionId = window.localStorage.getItem(storageKey);
           }
         }
         const query = forceNew
@@ -143,7 +351,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         setCategories(menuData.categories ?? []);
         setItems(menuData.items ?? []);
         if (typeof window !== "undefined" && tableData.session?.id) {
-          window.sessionStorage.setItem(storageKey, tableData.session.id);
+          window.localStorage.setItem(storageKey, tableData.session.id);
         }
         setError(null);
       } catch {
@@ -185,31 +393,78 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       refreshSessionBill(session.id);
       if (event.type === "order.accepted") {
         playChime("payment_success");
-        showToast(`Order #${event.order_number} accepted by Chef!`, "ok");
+        showToast(`Order #${event.order_number} accepted by kitchen.`, "ok");
       } else if (event.type === "order.rejected") {
         playChime("alert");
         showToast(event.message, "err");
       } else if (event.type === "item.ready") {
         playChime("item_ready");
-        showToast("Your dish is ready — staff is bringing it to your table!", "ok");
+        showToast("Your dish is ready and on its way to your table.", "ok");
       } else if (event.type === "payment.completed") {
         playChime("payment_success");
-        showToast("Payment confirmed! Thank you for dining with us.", "ok");
+        showToast("Payment confirmed. Thank you for dining with us.", "ok");
       } else if (event.type === "session.closed") {
-        showToast("Table session closed. Your paid GST invoice is saved below.", "ok");
+        showToast("Session settled. Your paid GST invoice stays visible below.", "ok");
       }
     }
   });
 
-  const openCustomize = (item: MenuItem) => {
-    if (!item.is_available) return;
+  // Scroll-spy for single sticky category bar
+  useEffect(() => {
+    if (activeTab !== "menu" || categories.length === 0 || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const sectionEls = categories
+      .map((c) => document.getElementById(`cat-${c.id}`))
+      .filter((el): el is HTMLElement => Boolean(el));
+    if (sectionEls.length === 0) return;
+
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visibleEntries[0]) {
+          const id = visibleEntries[0].target.id.replace("cat-", "");
+          setActiveScrollCategory(id);
+          const chipEl = categoryBarRef.current?.querySelector<HTMLElement>(
+            `[data-cat-chip="${id}"]`
+          );
+          chipEl?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", inline: "center", block: "nearest" });
+        }
+      },
+      { rootMargin: "-155px 0px -60% 0px", threshold: 0.05 }
+    );
+
+    sectionEls.forEach((el) => obs.observe(el));
+    return () => obs.disconnect();
+  }, [activeTab, categories, dietFilter, searchQuery, reducedMotion]);
+
+  const jumpToCategory = useCallback(
+    (catId: string) => {
+      setActiveScrollCategory(catId);
+      if (catId === "all") {
+        window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+        return;
+      }
+      const el = document.getElementById(`cat-${catId}`);
+      if (el) {
+        const top = el.getBoundingClientRect().top + window.scrollY - 165;
+        window.scrollTo({ top: Math.max(0, top), behavior: reducedMotion ? "auto" : "smooth" });
+      }
+    },
+    [reducedMotion]
+  );
+
+  const openCustomize = useCallback((item: MenuItem) => {
+    if (!item.is_available || item.stock_count <= 0) return;
     setCustomizingItem(item);
     const defaultVar = item.variants.find((v) => v.is_default) ?? item.variants[0] ?? null;
     setSelVariantId(defaultVar?.id ?? null);
     setSelAddonIds([]);
     setSelNote("");
     setSelQty(1);
-  };
+  }, []);
 
   const addCustomizedToCart = () => {
     if (!customizingItem) return;
@@ -250,36 +505,41 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
     showToast(`Added ${selQty}× ${customizingItem.name} to tray`, "ok");
   };
 
-  const quickAdd = (item: MenuItem) => {
-    if (!item.is_available) return;
-    if (item.variants.length > 0 || item.addons.length > 0) {
-      openCustomize(item);
-      return;
-    }
-    const key = `${item.id}|||`;
-    setCart((prev) => {
-      const idx = prev.findIndex((c) => c.key === key);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
-        return next;
+  const quickAdd = useCallback(
+    (item: MenuItem, sourceEl: HTMLElement | null) => {
+      if (!item.is_available || item.stock_count <= 0) return;
+      if (item.variants.length > 0 || item.addons.length > 0) {
+        openCustomize(item);
+        return;
       }
-      return [
-        ...prev,
-        {
-          key,
-          menu_item: item,
-          variant_id: null,
-          variant_name: null,
-          addon_ids: [],
-          addon_names: [],
-          unit_price: item.price,
-          quantity: 1,
-          instructions: "",
-        },
-      ];
-    });
-  };
+      launchFlyToTray(sourceEl, item.image_url);
+      const key = `${item.id}|||`;
+      setCart((prev) => {
+        const idx = prev.findIndex((c) => c.key === key);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
+          return next;
+        }
+        return [
+          ...prev,
+          {
+            key,
+            menu_item: item,
+            variant_id: null,
+            variant_name: null,
+            addon_ids: [],
+            addon_names: [],
+            unit_price: item.price,
+            quantity: 1,
+            instructions: "",
+          },
+        ];
+      });
+      showToast(`Added ${item.name} to tray`, "ok");
+    },
+    [launchFlyToTray, openCustomize, showToast]
+  );
 
   const updateCartQty = (key: string, delta: number) => {
     setCart((prev) =>
@@ -288,6 +548,14 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         .filter((c) => c.quantity > 0)
     );
   };
+
+  const cartQtyByItem = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of cart) {
+      map.set(c.menu_item.id, (map.get(c.menu_item.id) ?? 0) + c.quantity);
+    }
+    return map;
+  }, [cart]);
 
   const cartSummary = useMemo(() => {
     const count = cart.reduce((s, c) => s + c.quantity, 0);
@@ -326,10 +594,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       setCartOpen(false);
       setActiveTab("orders");
       playChime("new_order");
-      showToast(
-        `Order #${data.order.order_number} sent to Kitchen for Chef approval!`,
-        "ok"
-      );
+      showToast(`Order #${data.order.order_number} sent to kitchen for approval.`, "ok");
     } catch {
       showToast("Network error while placing order.", "err");
     } finally {
@@ -340,7 +605,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   const resubmitRejectedOrder = (rejectedOrder: Order) => {
     const reloaded: CartEntry[] = [];
     for (const oi of rejectedOrder.items) {
-      const menuItem = items.find((m) => m.id === oi.menu_item_id && m.is_available);
+      const menuItem = items.find(
+        (m) => m.id === oi.menu_item_id && m.is_available && m.stock_count > 0
+      );
       if (!menuItem) continue;
       reloaded.push({
         key: `${menuItem.id}|||resubmit-${oi.id}`,
@@ -372,7 +639,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
     const data = await res.json();
     if (res.ok) {
       setBill(data.bill);
-      showToast("Bill requested! Staff has been alerted to assist at your table / counter.", "ok");
+      showToast("Bill requested. Floor staff has been alerted.", "ok");
     } else {
       showToast(data.error ?? "Unable to request bill", "err");
     }
@@ -409,8 +676,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         return;
       }
 
-      // Brief simulated payment processing delay
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 450));
 
       const verifyRes = await fetch("/api/v1/payments/online/verify", {
         method: "POST",
@@ -441,6 +707,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       );
       if (verifyData.bill.balance_due <= 0.01) {
         setActiveTab("bill");
+        setCelebratePay(true);
         setReceiptOpen(true);
       }
     } finally {
@@ -450,7 +717,6 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      if (selectedCategory !== "all" && item.category_id !== selectedCategory) return false;
       if (dietFilter === "veg" && item.dietary !== "veg" && item.dietary !== "vegan") return false;
       if (dietFilter === "non_veg" && item.dietary !== "non_veg") return false;
       if (dietFilter === "vegan" && item.dietary !== "vegan") return false;
@@ -465,16 +731,14 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       }
       return true;
     });
-  }, [items, selectedCategory, dietFilter, searchQuery]);
+  }, [items, dietFilter, searchQuery]);
 
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-[#FAF7F2] p-6 text-stone-600">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#C2410C] text-white">
-          <UtensilsCrossed className="h-5 w-5 animate-pulse" />
-        </div>
+        <KoraMark className="h-12 w-12" />
         <p className="mt-4 font-serif text-lg text-stone-900">Preparing your table menu...</p>
-        <p className="mt-1 text-xs text-stone-500">Validating secure table QR session</p>
+        <p className="mt-1 text-xs text-stone-500">Validating your table QR session</p>
       </div>
     );
   }
@@ -482,8 +746,8 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   if (error || !table || !session) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-[#FAF7F2] p-6 text-center">
-        <div className="max-w-sm rounded-2xl border border-stone-200 bg-white p-7 shadow-xs">
-          <AlertTriangle className="mx-auto h-10 w-10 text-amber-600" />
+        <div className="max-w-sm rounded-2xl border border-stone-200 bg-white p-7">
+          <AlertTriangle className="mx-auto h-10 w-10 text-amber-600" strokeWidth={1.65} />
           <h1 className="mt-3 font-serif text-xl font-semibold text-stone-900">
             Invalid Table QR Code
           </h1>
@@ -492,9 +756,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
           </p>
           <Link
             href="/customer"
-            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-stone-900 px-4 py-2.5 text-xs font-semibold text-white"
+            className="mt-5 inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-stone-900 px-4 py-2.5 text-xs font-semibold text-white"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Choose Active Table
+            <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} /> Scan Another QR
           </Link>
         </div>
       </div>
@@ -509,80 +773,73 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
     o.items.some((i) => i.status === "pending_approval" || i.status === "accepted" || i.status === "preparing")
   );
 
-  return (
-    <div className="min-h-screen bg-[#FAF7F2] pb-28 text-[#1C1917]">
-      {/* Toast Notification */}
-      {toast && (
-        <div className="fixed top-4 right-4 left-4 z-50 mx-auto max-w-md">
-          <div
-            className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs font-medium shadow-lg ${
-              toast.tone === "err"
-                ? "border-rose-200 bg-rose-950 text-rose-50"
-                : toast.tone === "warn"
-                ? "border-amber-300 bg-amber-950 text-amber-50"
-                : "border-stone-800 bg-[#1C1917] text-stone-50"
-            }`}
-          >
-            <span>{toast.text}</span>
-            <button type="button" onClick={() => setToast(null)}>
-              <X className="h-4 w-4 opacity-70" />
-            </button>
-          </div>
-        </div>
-      )}
+  let renderedCardIdx = 0;
 
-      {/* Editorial Sticky Header */}
-      <header className="sticky top-0 z-30 border-b border-[#E8E1D6] bg-[#FAF7F2]/95 backdrop-blur-md">
-        <div className="mx-auto max-w-2xl px-4 pt-3.5 pb-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <Link
-                href="/customer"
-                className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#C2410C] text-white"
-                title="Switch Table"
-              >
-                <UtensilsCrossed className="h-4 w-4" />
+  return (
+    <div className="kora-grain min-h-screen bg-[#FAF7F2] pb-28 text-[#1C1917]">
+      {/* Solid Sticky Header (no heavy blur on mobile) */}
+      <header className="sticky top-0 z-30 border-b border-[#E8E1D6] bg-[#FAF7F2]">
+        <div className="mx-auto max-w-2xl px-4 pt-3 pb-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Link href="/customer" title="Scan table QR">
+                <KoraMark className="h-9 w-9" />
               </Link>
-              <div>
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h1 className="font-serif text-lg font-semibold leading-none">
+                  <h1 className="truncate font-serif text-lg font-semibold leading-none">
                     {settings?.name ?? "KORA"}
                   </h1>
                   <span
-                    className={`h-2 w-2 rounded-full ${
+                    className={`h-2 w-2 shrink-0 rounded-full ${
                       connected ? "bg-emerald-500" : "bg-amber-400"
                     }`}
                     title={connected ? "Live updates active" : "Reconnecting"}
                   />
                 </div>
-                <p className="mt-1 text-xs font-medium text-stone-600">
+                <p className="mt-1 truncate text-xs font-medium text-stone-600">
                   <span className="font-semibold text-stone-900">{table.table_number}</span>
                   {" · "}
                   {table.section}
                   {" · "}
                   <span className="text-emerald-700">
-                    {sessionClosed ? "Session Closed" : "Session Active"}
+                    {sessionClosed ? "Session Paid" : "Session Active"}
                   </span>
                 </p>
               </div>
             </div>
 
-            <Link
-              href="/"
-              className="rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-stone-600 hover:bg-stone-100"
-            >
-              Hub
-            </Link>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={toggleReducedMotion}
+                className={`inline-flex min-h-[34px] items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium ${
+                  reducedMotion
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                    : "border-stone-200 bg-white text-stone-600"
+                }`}
+                title="Toggle Lite / Reduced Motion mode for low-power phones"
+              >
+                <Zap className="h-3 w-3" strokeWidth={1.75} />
+                <span>{reducedMotion ? "Lite" : "Motion"}</span>
+              </button>
+              <Link
+                href="/"
+                className="inline-flex min-h-[34px] items-center rounded-lg border border-stone-200 bg-white px-2.5 py-1 text-[11px] font-medium text-stone-600 hover:bg-stone-100"
+              >
+                Hub
+              </Link>
+            </div>
           </div>
 
           {/* 3-Tab Navigation */}
-          <div className="mt-3 grid grid-cols-3 gap-1 rounded-xl bg-[#EFE9E0] p-1">
+          <div className="mt-2.5 grid grid-cols-3 gap-1 rounded-xl bg-[#EFE9E0] p-1">
             <button
               type="button"
               onClick={() => setActiveTab("menu")}
-              className={`rounded-lg py-2 text-xs font-semibold transition ${
+              className={`min-h-[38px] rounded-lg text-xs font-semibold transition ${
                 activeTab === "menu"
-                  ? "bg-white text-stone-900 shadow-xs"
+                  ? "bg-white text-stone-900"
                   : "text-stone-600 hover:text-stone-900"
               }`}
             >
@@ -591,9 +848,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("orders")}
-              className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition ${
+              className={`flex min-h-[38px] items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition ${
                 activeTab === "orders"
-                  ? "bg-white text-stone-900 shadow-xs"
+                  ? "bg-white text-stone-900"
                   : "text-stone-600 hover:text-stone-900"
               }`}
             >
@@ -607,9 +864,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("bill")}
-              className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition ${
+              className={`flex min-h-[38px] items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition ${
                 activeTab === "bill"
-                  ? "bg-white text-stone-900 shadow-xs"
+                  ? "bg-white text-stone-900"
                   : "text-stone-600 hover:text-stone-900"
               }`}
             >
@@ -624,24 +881,65 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-2xl px-4 pt-5">
+      {/* ONE Single Sticky Horizontally Scrollable Category Bar (Menu Tab) */}
+      {activeTab === "menu" && (
+        <div className="sticky top-[108px] z-20 border-b border-[#E8E1D6] bg-[#FAF7F2]">
+          <div
+            ref={categoryBarRef}
+            className="no-scrollbar mx-auto flex max-w-2xl items-center gap-2 overflow-x-auto px-4 py-2.5"
+          >
+            <button
+              type="button"
+              data-cat-chip="all"
+              onClick={() => jumpToCategory("all")}
+              className={`min-h-[38px] shrink-0 rounded-full px-3.5 text-xs font-semibold transition ${
+                activeScrollCategory === "all"
+                  ? "bg-[#C2410C] text-white"
+                  : "border border-[#E5DDD2] bg-white text-stone-700"
+              }`}
+            >
+              All
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                data-cat-chip={cat.id}
+                onClick={() => jumpToCategory(cat.id)}
+                className={`min-h-[38px] shrink-0 rounded-full px-3.5 text-xs font-semibold transition ${
+                  activeScrollCategory === cat.id
+                    ? "bg-[#C2410C] text-white"
+                    : "border border-[#E5DDD2] bg-white text-stone-700"
+                }`}
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <main className="mx-auto max-w-2xl px-4 pt-4">
         {sessionClosed && (
           <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-900">
-                  <CheckCircle2 className="h-4 w-4" />
+                  <CheckCircle2 className="h-4 w-4 shrink-0" strokeWidth={1.8} />
                   Bill Settled &amp; Table Session Closed
                 </p>
                 <p className="mt-1 text-xs text-emerald-800">
-                  Thank you for dining at {settings?.name}. You can view your GST receipt or
-                  start a fresh dining session.
+                  Thank you for dining at {settings?.name}. Your completed orders and paid
+                  GST invoice remain available below.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setReceiptOpen(true)}
-                className="shrink-0 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-semibold text-white"
+                onClick={() => {
+                  setCelebratePay(false);
+                  setReceiptOpen(true);
+                }}
+                className="min-h-[40px] shrink-0 rounded-xl bg-emerald-800 px-3.5 text-xs font-semibold text-white"
               >
                 Receipt
               </button>
@@ -649,9 +947,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
             <button
               type="button"
               onClick={() => loadTableAndMenu(true)}
-              className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-900 underline"
+              className="mt-3 inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-emerald-900 underline"
             >
-              <RefreshCw className="h-3.5 w-3.5" /> Start New Table Session
+              <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} /> Start New Table Session
             </button>
           </div>
         )}
@@ -659,191 +957,79 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         {/* ==================== MENU TAB ==================== */}
         {activeTab === "menu" && (
           <div>
-            {/* Search & Dietary Filters */}
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-stone-400" />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search biryanis, kebabs, naan, drinks..."
-                className="w-full rounded-xl border border-[#E5DDD2] bg-white py-2.5 pr-4 pl-10 text-sm outline-none transition placeholder:text-stone-400 focus:border-[#C2410C]"
-              />
-            </div>
-
-            <div className="no-scrollbar mt-3 flex items-center gap-2 overflow-x-auto pb-1">
-              {(
-                [
-                  { id: "all", label: "All Dishes" },
-                  { id: "bestseller", label: "Chef's Picks" },
-                  { id: "veg", label: "Pure Veg" },
-                  { id: "non_veg", label: "Non-Veg" },
-                  { id: "vegan", label: "Plant-Based" },
-                ] as const
-              ).map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setDietFilter(f.id)}
-                  className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
-                    dietFilter === f.id
-                      ? "border-stone-900 bg-stone-900 text-white"
-                      : "border-[#E5DDD2] bg-white text-stone-700 hover:border-stone-400"
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Category Jump Ribbon */}
-            <div className="no-scrollbar mt-3 flex items-center gap-2 overflow-x-auto border-b border-[#E8E1D6] pb-3">
-              <button
-                type="button"
-                onClick={() => setSelectedCategory("all")}
-                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                  selectedCategory === "all"
-                    ? "bg-[#C2410C] text-white"
-                    : "bg-[#EFE9E0]/70 text-stone-700 hover:bg-[#EFE9E0]"
-                }`}
+            {/* Compact Search + Inline Dietary Filter (single row, no stacked clipped chips) */}
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search
+                  className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-stone-400"
+                  strokeWidth={1.75}
+                />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search biryanis, kebabs, naan..."
+                  className="min-h-[44px] w-full rounded-xl border border-[#E5DDD2] bg-white py-2 pr-3 pl-10 text-sm outline-none placeholder:text-stone-400 focus:border-[#C2410C]"
+                />
+              </div>
+              <select
+                aria-label="Filter dishes by dietary preference"
+                value={dietFilter}
+                onChange={(e) =>
+                  setDietFilter(
+                    e.target.value as "all" | "veg" | "non_veg" | "vegan" | "bestseller"
+                  )
+                }
+                className="min-h-[44px] shrink-0 rounded-xl border border-[#E5DDD2] bg-white px-3 text-xs font-semibold text-stone-800 outline-none focus:border-[#C2410C]"
               >
-                Full Menu
-              </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setSelectedCategory(cat.id)}
-                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                    selectedCategory === cat.id
-                      ? "bg-[#C2410C] text-white"
-                      : "bg-[#EFE9E0]/70 text-stone-700 hover:bg-[#EFE9E0]"
-                  }`}
-                >
-                  {cat.name}
-                </button>
-              ))}
+                <option value="all">All Dishes</option>
+                <option value="bestseller">Chef&apos;s Picks</option>
+                <option value="veg">Pure Veg</option>
+                <option value="non_veg">Non-Veg</option>
+                <option value="vegan">Plant-Based</option>
+              </select>
             </div>
 
             {/* Dish List Grouped by Category */}
             <div className="mt-5 space-y-7">
-              {categories
-                .filter((c) => selectedCategory === "all" || c.id === selectedCategory)
-                .map((cat) => {
-                  const catItems = filteredItems.filter((i) => i.category_id === cat.id);
-                  if (catItems.length === 0) return null;
-                  return (
-                    <section key={cat.id}>
-                      <div className="mb-3 flex items-baseline justify-between">
-                        <div>
-                          <h2 className="font-serif text-xl font-semibold text-stone-900">
-                            {cat.name}
-                          </h2>
-                          <p className="text-xs text-stone-500">{cat.description}</p>
-                        </div>
-                        <span className="font-mono text-xs text-stone-400">
-                          {catItems.length}
-                        </span>
+              {categories.map((cat) => {
+                const catItems = filteredItems.filter((i) => i.category_id === cat.id);
+                if (catItems.length === 0) return null;
+                return (
+                  <section key={cat.id} id={`cat-${cat.id}`} className="scroll-mt-44">
+                    <div className="mb-3 flex items-baseline justify-between">
+                      <div>
+                        <h2 className="font-serif text-xl font-semibold text-stone-900">
+                          {cat.name}
+                        </h2>
+                        <p className="text-xs text-stone-500">{cat.description}</p>
                       </div>
+                      <span className="font-mono text-xs text-stone-400">
+                        {catItems.length}
+                      </span>
+                    </div>
 
-                      <div className="space-y-3">
-                        {catItems.map((item) => {
-                          const qtyInCart = cart
-                            .filter((c) => c.menu_item.id === item.id)
-                            .reduce((s, c) => s + c.quantity, 0);
-
-                          return (
-                            <article
-                              key={item.id}
-                              className={`flex gap-3.5 rounded-2xl border border-[#EAE2D7] bg-white p-3.5 shadow-[0_1px_2px_rgba(28,25,23,0.03)] transition ${
-                                !item.is_available ? "opacity-60 grayscale-[35%]" : ""
-                              }`}
-                            >
-                              <div className="flex flex-1 flex-col justify-between">
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <DietaryMark dietary={item.dietary} />
-                                    {item.is_bestseller && (
-                                      <span className="inline-flex items-center gap-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                                        <Sparkles className="h-2.5 w-2.5" /> Chef&apos;s Pick
-                                      </span>
-                                    )}
-                                    {item.spice_level >= 2 && (
-                                      <span
-                                        className="inline-flex items-center text-orange-600"
-                                        title={`Spice level ${item.spice_level}/3`}
-                                      >
-                                        {Array.from({ length: item.spice_level }).map((_, idx) => (
-                                          <Flame key={idx} className="h-3 w-3 fill-orange-500" />
-                                        ))}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <h3 className="mt-1.5 font-serif text-base font-semibold leading-snug text-stone-900">
-                                    {item.name}
-                                  </h3>
-                                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-stone-500">
-                                    {item.description}
-                                  </p>
-                                </div>
-
-                                <div className="mt-3 flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2.5">
-                                    <span className="font-mono text-sm font-semibold tabular-nums text-stone-900">
-                                      {formatCurrency(item.price)}
-                                    </span>
-                                    <span className="inline-flex items-center gap-1 text-[11px] text-stone-400">
-                                      <Clock className="h-3 w-3" /> {item.prep_minutes}m
-                                    </span>
-                                  </div>
-
-                                  {!item.is_available ? (
-                                    <span className="rounded-lg bg-stone-100 px-2.5 py-1 text-[11px] font-semibold text-stone-500">
-                                      Sold Out
-                                    </span>
-                                  ) : sessionClosed ? (
-                                    <span className="text-[11px] text-stone-400">Closed</span>
-                                  ) : (
-                                    <div className="flex items-center gap-1.5">
-                                      {(item.variants.length > 0 || item.addons.length > 0) && (
-                                        <button
-                                          type="button"
-                                          onClick={() => openCustomize(item)}
-                                          className="rounded-lg border border-stone-200 px-2 py-1.5 text-[11px] font-medium text-stone-600 hover:bg-stone-50"
-                                        >
-                                          Customize
-                                        </button>
-                                      )}
-                                      <button
-                                        type="button"
-                                        onClick={() => quickAdd(item)}
-                                        className="inline-flex items-center gap-1 rounded-xl bg-[#1C1917] px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#C2410C]"
-                                      >
-                                        <Plus className="h-3.5 w-3.5" />
-                                        Add{qtyInCart > 0 ? ` (${qtyInCart})` : ""}
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-stone-100 sm:h-28 sm:w-28">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={item.image_url}
-                                  alt={item.name}
-                                  className="h-full w-full object-cover"
-                                  loading="lazy"
-                                />
-                              </div>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  );
-                })}
+                    <div className="space-y-3">
+                      {catItems.map((item) => {
+                        const priority = renderedCardIdx < 3;
+                        renderedCardIdx += 1;
+                        return (
+                          <DishCard
+                            key={item.id}
+                            item={item}
+                            qtyInCart={cartQtyByItem.get(item.id) ?? 0}
+                            sessionClosed={sessionClosed}
+                            priority={priority}
+                            reducedMotion={reducedMotion}
+                            onQuickAdd={quickAdd}
+                            onCustomize={openCustomize}
+                          />
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
           </div>
         )}
@@ -851,7 +1037,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         {/* ==================== LIVE ORDER TRACKING TAB ==================== */}
         {activeTab === "orders" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-serif text-xl font-semibold text-stone-900">
                   {sessionClosed ? "Completed Visit Orders" : "Live Table Orders"}
@@ -859,14 +1045,14 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 <p className="text-xs text-stone-500">
                   {sessionClosed
                     ? "Your session is settled. All ordered items and your GST receipt remain visible."
-                    : "All orders in this session update live per dish — no refresh needed."}
+                    : "Every dish updates live from kitchen acceptance to table service."}
                 </p>
               </div>
               {!sessionClosed ? (
                 <button
                   type="button"
                   onClick={() => setActiveTab("menu")}
-                  className="rounded-xl bg-[#C2410C] px-3 py-1.5 text-xs font-semibold text-white"
+                  className="min-h-[40px] shrink-0 rounded-xl bg-[#C2410C] px-3.5 text-xs font-semibold text-white"
                 >
                   + Order More
                 </button>
@@ -874,7 +1060,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 <button
                   type="button"
                   onClick={() => setActiveTab("bill")}
-                  className="rounded-xl bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white"
+                  className="min-h-[40px] shrink-0 rounded-xl bg-emerald-700 px-3.5 text-xs font-semibold text-white"
                 >
                   View Paid Invoice
                 </button>
@@ -883,7 +1069,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
 
             {(bill?.orders ?? []).length === 0 ? (
               <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-10 text-center">
-                <UtensilsCrossed className="mx-auto h-8 w-8 text-stone-300" />
+                <KoraMark className="mx-auto h-10 w-10 opacity-40" />
                 <p className="mt-3 text-sm font-semibold text-stone-700">
                   No orders placed yet for {table.table_number}
                 </p>
@@ -894,25 +1080,27 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
             ) : (
               (bill?.orders ?? []).map((order) => {
                 const steps = [
-                  { id: "pending_approval", label: "Sent" },
-                  { id: "accepted", label: "Chef Approved" },
+                  { id: "pending_approval", label: "Placed" },
+                  { id: "accepted", label: "Accepted" },
                   { id: "preparing", label: "Cooking" },
+                  { id: "ready", label: "Ready" },
                   { id: "served", label: "Served" },
                 ];
                 const rankMap: Record<string, number> = {
                   pending_approval: 0,
                   accepted: 1,
                   preparing: 2,
-                  ready: 2.5,
-                  served: 3,
-                  completed: 3,
+                  ready: 3,
+                  served: 4,
+                  completed: 4,
                 };
                 const currentRank = rankMap[order.status] ?? -1;
+                const progressRatio = currentRank < 0 ? 0 : (currentRank + 1) / steps.length;
 
                 return (
                   <div
                     key={order.id}
-                    className="rounded-2xl border border-[#E8E1D6] bg-white p-4 shadow-xs"
+                    className="rounded-2xl border border-[#E8E1D6] bg-white p-4"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-3">
                       <div>
@@ -933,28 +1121,30 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                       <StatusBadge status={order.status} />
                     </div>
 
-                    {/* Progress Stepper (when not rejected/cancelled) */}
+                    {/* GPU Animated Order Progress Bar (Placed -> Accepted -> Cooking -> Ready -> Served) */}
                     {currentRank >= 0 && (
-                      <div className="my-3.5 grid grid-cols-4 gap-1.5">
-                        {steps.map((step, idx) => {
-                          const done = currentRank >= idx;
-                          return (
-                            <div key={step.id} className="space-y-1">
-                              <div
-                                className={`h-1.5 rounded-full transition-all ${
-                                  done ? "bg-[#C2410C]" : "bg-stone-200"
-                                }`}
-                              />
-                              <p
-                                className={`text-[10px] font-medium ${
-                                  done ? "text-stone-900" : "text-stone-400"
+                      <div className="my-4">
+                        <div className="relative h-1.5 overflow-hidden rounded-full bg-stone-200">
+                          <div
+                            className="h-full origin-left rounded-full bg-[#C2410C] transition-transform duration-300 ease-out"
+                            style={{ transform: `scaleX(${progressRatio})` }}
+                          />
+                        </div>
+                        <div className="mt-2 grid grid-cols-5 gap-1 text-center">
+                          {steps.map((step, idx) => {
+                            const done = currentRank >= idx;
+                            return (
+                              <span
+                                key={step.id}
+                                className={`text-[10px] font-medium transition-opacity duration-200 ${
+                                  done ? "font-semibold text-stone-900 opacity-100" : "text-stone-400 opacity-75"
                                 }`}
                               >
                                 {step.label}
-                              </p>
-                            </div>
-                          );
-                        })}
+                              </span>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
 
@@ -970,7 +1160,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                         <button
                           type="button"
                           onClick={() => resubmitRejectedOrder(order)}
-                          className="mt-2 rounded-lg bg-rose-900 px-3 py-1.5 text-[11px] font-semibold text-white"
+                          className="mt-2 min-h-[38px] rounded-lg bg-rose-900 px-3 text-[11px] font-semibold text-white"
                         >
                           Edit &amp; Resubmit to Kitchen
                         </button>
@@ -1026,14 +1216,14 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         {/* ==================== COMBINED TABLE BILL & PAYMENT TAB ==================== */}
         {activeTab === "bill" && bill && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-[#E8E1D6] bg-white p-5 shadow-xs">
+            <div className="rounded-2xl border border-[#E8E1D6] bg-white p-5">
               <div className="flex items-start justify-between border-b border-dashed border-stone-200 pb-4">
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-widest text-stone-400">
                     Combined Session Bill
                   </p>
                   <h2 className="mt-1 font-serif text-xl font-semibold text-stone-900">
-                    {table.table_number} — Final Summary
+                    {table.table_number} Final Summary
                   </h2>
                   <p className="mt-0.5 text-xs text-stone-500">
                     Includes all accepted orders placed during this visit
@@ -1141,23 +1331,23 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                       <button
                         type="button"
                         onClick={openOnlineCheckout}
-                        className="flex items-center justify-center gap-2 rounded-xl bg-[#C2410C] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#9A3412]"
+                        className="flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#C2410C] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#9A3412]"
                       >
-                        <Smartphone className="h-4 w-4" />
-                        Demo Pay Online (UPI / Card)
+                        <Smartphone className="h-4 w-4" strokeWidth={1.75} />
+                        Demo Pay Online
                       </button>
                       <button
                         type="button"
                         onClick={requestCounterBill}
-                        className="flex items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-3 text-sm font-semibold text-stone-900 transition hover:bg-stone-50"
+                        className="flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-3 text-sm font-semibold text-stone-900 transition hover:bg-stone-50"
                       >
-                        <Store className="h-4 w-4" />
+                        <Store className="h-4 w-4" strokeWidth={1.75} />
                         Pay at Counter
                       </button>
                     </div>
                   ) : (
                     <div className="mt-5 space-y-4">
-                      {/* Inline Paid GST Tax Invoice kept permanently visible after payment */}
+                      {/* Inline Paid GST Tax Invoice */}
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 font-mono text-xs text-stone-800">
                         <div className="border-b border-dashed border-emerald-300 pb-2 text-center">
                           <p className="font-serif text-base font-bold text-stone-900">
@@ -1199,10 +1389,13 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
 
                       <button
                         type="button"
-                        onClick={() => setReceiptOpen(true)}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-800"
+                        onClick={() => {
+                          setCelebratePay(false);
+                          setReceiptOpen(true);
+                        }}
+                        className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-800"
                       >
-                        <Receipt className="h-4 w-4" />
+                        <Receipt className="h-4 w-4" strokeWidth={1.75} />
                         Print / Download GST Tax Receipt
                       </button>
                     </div>
@@ -1212,9 +1405,9 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                     <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900">
                       <p className="font-semibold">Counter Bill Request Active</p>
                       <p className="mt-0.5">
-                        Your waiter &amp; cashier have been notified for{" "}
-                        <strong>{table.table_number}</strong>. You may pay at the counter or
-                        complete online UPI payment above anytime.
+                        Your waiter and cashier have been notified for{" "}
+                        <strong>{table.table_number}</strong>. Pay at the counter or complete
+                        a demo online payment above anytime.
                       </p>
                     </div>
                   )}
@@ -1222,7 +1415,6 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               )}
             </div>
 
-            {/* Payment Ledger for this session */}
             {bill.payments.length > 0 && (
               <div className="rounded-2xl border border-[#E8E1D6] bg-white p-4">
                 <p className="text-xs font-semibold uppercase tracking-wider text-stone-500">
@@ -1256,13 +1448,43 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         )}
       </main>
 
-      {/* Floating Cart Bar */}
+      {/* Bottom Toast positioned directly ABOVE the bottom tray bar (never covers header) */}
+      {toast && (
+        <div
+          className={`fixed right-4 left-4 z-40 mx-auto max-w-2xl transition-transform duration-200 ${
+            cartSummary.count > 0 && !sessionClosed ? "bottom-22" : "bottom-5"
+          }`}
+        >
+          <div
+            className={`kora-card-enter flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs font-medium ${
+              toast.tone === "err"
+                ? "border-rose-200 bg-rose-950 text-rose-50"
+                : toast.tone === "warn"
+                ? "border-amber-300 bg-amber-950 text-amber-50"
+                : "border-stone-800 bg-[#1C1917] text-stone-50"
+            }`}
+          >
+            <span>{toast.text}</span>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-white/10"
+              aria-label="Dismiss message"
+            >
+              <X className="h-3.5 w-3.5 opacity-80" strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Bottom Tray Bar */}
       {cartSummary.count > 0 && !sessionClosed && (
         <div className="fixed right-4 bottom-4 left-4 z-30 mx-auto max-w-2xl">
           <button
+            ref={trayButtonRef}
             type="button"
             onClick={() => setCartOpen(true)}
-            className="flex w-full items-center justify-between rounded-2xl bg-[#1C1917] px-5 py-3.5 text-white shadow-xl transition hover:bg-[#C2410C]"
+            className="flex min-h-[56px] w-full items-center justify-between rounded-2xl bg-[#1C1917] px-5 py-3 text-white transition hover:bg-[#C2410C]"
           >
             <div className="flex items-center gap-3">
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/15 font-mono text-xs font-bold">
@@ -1277,7 +1499,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               </div>
             </div>
             <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
-              <ShoppingBag className="h-4 w-4" /> Review Order
+              <ShoppingBag className="h-4 w-4" strokeWidth={1.75} /> Review Order
             </span>
           </button>
         </div>
@@ -1286,7 +1508,17 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       {/* ==================== DISH CUSTOMIZATION MODAL ==================== */}
       {customizingItem && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4">
-          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
+          <div className="kora-card-enter max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
+            <div className="mb-4 h-44 w-full overflow-hidden rounded-2xl">
+              <DishImage
+                src={customizingItem.image_url}
+                alt={customizingItem.name}
+                variant="medium"
+                priority
+                className="h-full w-full"
+              />
+            </div>
+
             <div className="flex items-start justify-between gap-3">
               <div>
                 <DietaryMark dietary={customizingItem.dietary} showLabel />
@@ -1300,9 +1532,10 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               <button
                 type="button"
                 onClick={() => setCustomizingItem(null)}
-                className="rounded-full bg-stone-100 p-1.5 text-stone-600"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600"
+                aria-label="Close"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.75} />
               </button>
             </div>
 
@@ -1315,7 +1548,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                   {customizingItem.variants.map((v) => (
                     <label
                       key={v.id}
-                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-sm ${
+                      className={`flex min-h-[46px] cursor-pointer items-center justify-between rounded-xl border p-3 text-sm ${
                         selVariantId === v.id
                           ? "border-[#C2410C] bg-orange-50/50"
                           : "border-stone-200"
@@ -1351,7 +1584,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                     return (
                       <label
                         key={a.id}
-                        className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-sm ${
+                        className={`flex min-h-[46px] cursor-pointer items-center justify-between rounded-xl border p-3 text-sm ${
                           checked ? "border-[#C2410C] bg-orange-50/50" : "border-stone-200"
                         }`}
                       >
@@ -1386,8 +1619,8 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 type="text"
                 value={selNote}
                 onChange={(e) => setSelNote(e.target.value)}
-                placeholder="e.g. Less spicy, no onions, extra crisp"
-                className="mt-1.5 w-full rounded-xl border border-stone-200 px-3 py-2 text-sm outline-none focus:border-[#C2410C]"
+                placeholder="Less spicy, no onions, extra crisp"
+                className="mt-1.5 min-h-[44px] w-full rounded-xl border border-stone-200 px-3 py-2 text-sm outline-none focus:border-[#C2410C]"
               />
             </div>
 
@@ -1396,9 +1629,10 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 <button
                   type="button"
                   onClick={() => setSelQty((q) => Math.max(1, q - 1))}
-                  className="p-2.5 text-stone-600"
+                  className="flex h-11 w-11 items-center justify-center text-stone-600"
+                  aria-label="Decrease quantity"
                 >
-                  <Minus className="h-4 w-4" />
+                  <Minus className="h-4 w-4" strokeWidth={1.75} />
                 </button>
                 <span className="w-8 text-center font-mono text-sm font-semibold">
                   {selQty}
@@ -1406,15 +1640,16 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 <button
                   type="button"
                   onClick={() => setSelQty((q) => q + 1)}
-                  className="p-2.5 text-stone-600"
+                  className="flex h-11 w-11 items-center justify-center text-stone-600"
+                  aria-label="Increase quantity"
                 >
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-4 w-4" strokeWidth={1.75} />
                 </button>
               </div>
               <button
                 type="button"
                 onClick={addCustomizedToCart}
-                className="flex-1 rounded-xl bg-[#C2410C] py-3 text-sm font-semibold text-white hover:bg-[#9A3412]"
+                className="min-h-[46px] flex-1 rounded-xl bg-[#C2410C] py-3 text-sm font-semibold text-white hover:bg-[#9A3412]"
               >
                 Add to Tray ·{" "}
                 {formatCurrency(
@@ -1435,22 +1670,23 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       {/* ==================== CART REVIEW DRAWER ==================== */}
       {cartOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4">
-          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
+          <div className="kora-card-enter max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
             <div className="flex items-center justify-between border-b border-stone-100 pb-3">
               <div>
                 <h3 className="font-serif text-lg font-semibold">
-                  Review Order — {table.table_number}
+                  Review Order ({table.table_number})
                 </h3>
                 <p className="text-xs text-stone-500">
-                  Sent directly to kitchen for Chef approval · Pay later
+                  Sent directly to kitchen for Chef approval. Pay when ready.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setCartOpen(false)}
-                className="rounded-full bg-stone-100 p-1.5 text-stone-600"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-stone-100 text-stone-600"
+                aria-label="Close tray"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.75} />
               </button>
             </div>
 
@@ -1473,13 +1709,14 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                       {formatCurrency(c.unit_price * c.quantity)}
                     </p>
                   </div>
-                  <div className="flex items-center rounded-lg border border-stone-200">
+                  <div className="flex items-center rounded-xl border border-stone-200">
                     <button
                       type="button"
                       onClick={() => updateCartQty(c.key, -1)}
-                      className="p-1.5 text-stone-600"
+                      className="flex h-10 w-10 items-center justify-center text-stone-600"
+                      aria-label="Remove one"
                     >
-                      <Minus className="h-3.5 w-3.5" />
+                      <Minus className="h-3.5 w-3.5" strokeWidth={1.8} />
                     </button>
                     <span className="w-7 text-center font-mono text-xs font-semibold">
                       {c.quantity}
@@ -1487,9 +1724,10 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                     <button
                       type="button"
                       onClick={() => updateCartQty(c.key, 1)}
-                      className="p-1.5 text-stone-600"
+                      className="flex h-10 w-10 items-center justify-center text-stone-600"
+                      aria-label="Add one"
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      <Plus className="h-3.5 w-3.5" strokeWidth={1.8} />
                     </button>
                   </div>
                 </div>
@@ -1504,8 +1742,8 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 type="text"
                 value={orderNote}
                 onChange={(e) => setOrderNote(e.target.value)}
-                placeholder="e.g. Serve starters first, peanut allergy..."
-                className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-sm outline-none focus:border-[#C2410C]"
+                placeholder="Serve starters first, peanut allergy..."
+                className="mt-1 min-h-[44px] w-full rounded-xl border border-stone-200 px-3 py-2 text-sm outline-none focus:border-[#C2410C]"
               />
             </div>
 
@@ -1528,7 +1766,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               type="button"
               disabled={placingOrder || cart.length === 0}
               onClick={placeOrder}
-              className="mt-4 w-full rounded-xl bg-[#C2410C] py-3.5 text-sm font-semibold text-white transition hover:bg-[#9A3412] disabled:opacity-60"
+              className="mt-4 min-h-[48px] w-full rounded-xl bg-[#C2410C] py-3.5 text-sm font-semibold text-white transition hover:bg-[#9A3412] disabled:opacity-60"
             >
               {placingOrder ? "Sending to Kitchen..." : "Place Order · Send to Chef"}
             </button>
@@ -1536,191 +1774,34 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         </div>
       )}
 
-      {/* ==================== DEMO SIMULATED ONLINE PAYMENT MODAL ==================== */}
+      {/* Lazy-Loaded Demo Payment Modal */}
       {payModalOpen && bill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between border-b border-stone-100 pb-4">
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest text-[#C2410C]">
-                  Demo Payment — Simulated, No Real Charge
-                </p>
-                <h3 className="mt-1 font-serif text-lg font-semibold text-stone-900">
-                  {settings?.name} · {table.table_number}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPayModalOpen(false)}
-                className="rounded-full bg-stone-100 p-1.5 text-stone-500"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              Demo payment — simulated, no real charge. Completing this form records a
-              simulated payment and generates your GST invoice.
-            </div>
-
-            <div className="mt-4">
-              <label className="text-xs font-semibold text-stone-600">
-                Amount to Pay (Full or Partial Split)
-              </label>
-              <div className="mt-1 flex items-center gap-2">
-                <span className="font-mono text-lg font-semibold text-stone-500">₹</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={bill.balance_due}
-                  step="0.01"
-                  value={payAmountInput}
-                  onChange={(e) => setPayAmountInput(e.target.value)}
-                  className="w-full rounded-xl border border-stone-200 px-3 py-2 font-mono text-base font-semibold outline-none focus:border-[#C2410C]"
-                />
-                <button
-                  type="button"
-                  onClick={() => setPayAmountInput(String(bill.balance_due))}
-                  className="shrink-0 rounded-lg bg-stone-100 px-2.5 py-2 text-xs font-semibold text-stone-700"
-                >
-                  Full
-                </button>
-              </div>
-              <p className="mt-1 text-[11px] text-stone-500">
-                Total balance due: {formatCurrency(bill.balance_due)}
-              </p>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setPayChannel("upi")}
-                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold ${
-                  payChannel === "upi"
-                    ? "border-[#C2410C] bg-orange-50 text-[#9A3412]"
-                    : "border-stone-200 text-stone-600"
-                }`}
-              >
-                <Smartphone className="h-4 w-4" /> Simulated UPI
-              </button>
-              <button
-                type="button"
-                onClick={() => setPayChannel("card")}
-                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold ${
-                  payChannel === "card"
-                    ? "border-[#C2410C] bg-orange-50 text-[#9A3412]"
-                    : "border-stone-200 text-stone-600"
-                }`}
-              >
-                <CreditCard className="h-4 w-4" /> Simulated Card
-              </button>
-            </div>
-
-            {payChannel === "upi" ? (
-              <div className="mt-4">
-                <label className="text-xs font-medium text-stone-600">
-                  Demo UPI Handle
-                </label>
-                <input
-                  type="text"
-                  value={upiId}
-                  onChange={(e) => setUpiId(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                />
-              </div>
-            ) : (
-              <div className="mt-4 rounded-xl bg-stone-50 p-3 text-xs text-stone-600">
-                Simulated Test Card •••• 4242 · Exp 12/29 · No real card will be charged
-              </div>
-            )}
-
-            <button
-              type="button"
-              disabled={processingPay}
-              onClick={executeOnlinePayment}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#C2410C] py-3 text-sm font-semibold text-white transition hover:bg-[#9A3412] disabled:opacity-60"
-            >
-              <Check className="h-4 w-4" />
-              {processingPay
-                ? "Recording Demo Payment..."
-                : `Confirm Demo Payment · ${formatCurrency(Number(payAmountInput) || 0)}`}
-            </button>
-          </div>
-        </div>
+        <DemoPaymentModal
+          bill={bill}
+          table={table}
+          settings={settings}
+          payChannel={payChannel}
+          setPayChannel={setPayChannel}
+          payAmountInput={payAmountInput}
+          setPayAmountInput={setPayAmountInput}
+          upiId={upiId}
+          setUpiId={setUpiId}
+          processingPay={processingPay}
+          onClose={() => setPayModalOpen(false)}
+          onConfirm={executeOnlinePayment}
+        />
       )}
 
-      {/* ==================== PRINTABLE GST THERMAL RECEIPT ==================== */}
+      {/* Lazy-Loaded Paid GST Receipt Modal (with Animated Checkmark & Confetti) */}
       {receiptOpen && bill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 font-mono text-xs text-stone-800 shadow-2xl">
-            <div className="text-center">
-              <p className="font-serif text-lg font-bold text-stone-900">
-                {settings?.name}
-              </p>
-              <p className="mt-0.5 text-[11px] text-stone-500">{settings?.address}</p>
-              <p className="mt-0.5 text-[11px] text-stone-500">
-                GSTIN: {settings?.gstin}
-              </p>
-              <p className="mt-2 border-y border-dashed border-stone-300 py-1 font-semibold">
-                TAX INVOICE · {table.table_number}
-              </p>
-            </div>
-
-            <div className="mt-3 space-y-1.5">
-              {bill.line_items.map((li, i) => (
-                <div key={i} className="flex justify-between gap-2">
-                  <span>
-                    {li.quantity}× {li.item_name}
-                  </span>
-                  <span>{formatCurrency(li.item_total)}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-3 space-y-1 border-t border-dashed border-stone-300 pt-2">
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-                <span>{formatCurrency(bill.subtotal)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>CGST + SGST ({bill.tax_rate_percent}%)</span>
-                <span>{formatCurrency(bill.tax_amount)}</span>
-              </div>
-              <div className="flex justify-between text-sm font-bold text-stone-900">
-                <span>TOTAL PAID</span>
-                <span>{formatCurrency(bill.amount_paid)}</span>
-              </div>
-            </div>
-
-            <div className="mt-3 border-t border-dashed border-stone-300 pt-2 text-[10px] text-stone-500">
-              {bill.payments
-                .filter((p) => p.status === "paid")
-                .map((p) => (
-                  <p key={p.id}>
-                    {p.receipt_number} · {p.method.toUpperCase()} ({p.channel.toUpperCase()}) ·{" "}
-                    {formatCurrency(p.amount)}
-                  </p>
-                ))}
-            </div>
-
-            <div className="no-print mt-5 flex gap-2 font-sans">
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-stone-900 py-2.5 text-xs font-semibold text-white"
-              >
-                <Printer className="h-3.5 w-3.5" /> Print / PDF
-              </button>
-              <button
-                type="button"
-                onClick={() => setReceiptOpen(false)}
-                className="rounded-xl border border-stone-200 px-4 py-2.5 text-xs font-semibold text-stone-700"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <PaidReceiptModal
+          bill={bill}
+          table={table}
+          settings={settings}
+          celebrate={celebratePay}
+          reducedMotion={reducedMotion}
+          onClose={() => setReceiptOpen(false)}
+        />
       )}
     </div>
   );

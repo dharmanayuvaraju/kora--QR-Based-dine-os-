@@ -16,6 +16,7 @@ const Schema = z.object({
     .default("/dishes/black-dal.jpg"),
   is_bestseller: z.boolean().default(false),
   is_available: z.boolean().default(true),
+  stock_count: z.number().int().min(0).max(9999).default(20),
   variants: z
     .array(
       z.object({

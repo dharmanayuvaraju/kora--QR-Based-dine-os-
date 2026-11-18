@@ -58,7 +58,7 @@ export function QrCodeCard({
     win.document.write(`
       <html>
         <head>
-          <title>${tableNumber} QR Standee — ${restaurantName}</title>
+          <title>${tableNumber} QR Standee | ${restaurantName}</title>
           <style>
             body { font-family: Georgia, serif; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:#FAF8F5; color:#1C1917; }
             .card { width: 320px; border: 2px solid #1C1917; padding: 32px 24px; text-align:center; background:#fff; border-radius: 16px; }

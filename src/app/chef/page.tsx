@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Ban,
   Check,
   CheckCircle2,
   Clock,
+  Flag,
   Flame,
   History,
   Package,
@@ -17,11 +18,13 @@ import { RoleAuthGate } from "@/components/RoleAuthGate";
 import { ConsoleHeader } from "@/components/ConsoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useRealtime } from "@/hooks/useRealtime";
+import { useMotionPreference } from "@/hooks/useMotionPreference";
 import { playChime } from "@/lib/sound";
 import { formatElapsed, formatTimeShort } from "@/lib/utils";
 import {
   REJECTION_REASONS,
   type InventoryItem,
+  type LowStockFlag,
   type MenuItem,
   type Order,
   type User,
@@ -35,6 +38,7 @@ interface ChefPayload {
   history: Order[];
   menu_items: MenuItem[];
   inventory_low: InventoryItem[];
+  low_stock_flags?: LowStockFlag[];
 }
 
 function ChefWorkspace({
@@ -44,12 +48,20 @@ function ChefWorkspace({
   user: User;
   logout: () => Promise<void>;
 }) {
+  const { reducedMotion } = useMotionPreference();
   const [data, setData] = useState<ChefPayload | null>(null);
   const [tab, setTab] = useState<"kds" | "availability" | "history">("kds");
   const [muted, setMuted] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [freshTicketIds, setFreshTicketIds] = useState<Set<string>>(new Set());
+  const seenPendingIdsRef = useRef<Set<string>>(new Set());
+
+  // Low-Stock Flag Modal
+  const [flagTarget, setFlagTarget] = useState<MenuItem | null>(null);
+  const [flagNote, setFlagNote] = useState("");
+  const [submittingFlag, setSubmittingFlag] = useState(false);
 
   // Reject Order / Item Modal
   const [rejectTarget, setRejectTarget] = useState<{
@@ -62,7 +74,25 @@ function ChefWorkspace({
 
   const fetchOrders = useCallback(async () => {
     const res = await fetch("/api/v1/chef/orders", { cache: "no-store" });
-    if (res.ok) setData(await res.json());
+    if (res.ok) {
+      const next = (await res.json()) as ChefPayload;
+      const incomingIds = next.pending.map((o) => o.id);
+      if (seenPendingIdsRef.current.size > 0) {
+        const newlyAdded = incomingIds.filter((id) => !seenPendingIdsRef.current.has(id));
+        if (newlyAdded.length > 0) {
+          setFreshTicketIds((prev) => new Set([...prev, ...newlyAdded]));
+          setTimeout(() => {
+            setFreshTicketIds((prev) => {
+              const copy = new Set(prev);
+              newlyAdded.forEach((id) => copy.delete(id));
+              return copy;
+            });
+          }, 2600);
+        }
+      }
+      incomingIds.forEach((id) => seenPendingIdsRef.current.add(id));
+      setData(next);
+    }
   }, []);
 
   useEffect(() => {
@@ -110,6 +140,32 @@ function ChefWorkspace({
       await fetchOrders();
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const submitLowStockFlag = async () => {
+    if (!flagTarget) return;
+    setSubmittingFlag(true);
+    try {
+      const res = await fetch("/api/v1/chef/low-stock-flags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          menu_item_id: flagTarget.id,
+          note: flagNote.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setBanner(json.error ?? "Could not submit low-stock flag");
+      } else {
+        setBanner(`Flagged low stock for ${flagTarget.name}. Manager and Owner alerted.`);
+        setFlagTarget(null);
+        setFlagNote("");
+        await fetchOrders();
+      }
+    } finally {
+      setSubmittingFlag(false);
     }
   };
 
@@ -234,10 +290,18 @@ function ChefWorkspace({
                     All incoming orders reviewed. Waiting for next table order...
                   </div>
                 ) : (
-                  pending.map((order) => (
+                  pending.map((order) => {
+                    const isFresh = freshTicketIds.has(order.id);
+                    return (
                     <article
                       key={order.id}
-                      className="overflow-hidden rounded-xl border border-amber-500/35 bg-[#181C25] shadow-md"
+                      className={`overflow-hidden rounded-xl border bg-[#181C25] shadow-md ${
+                        !reducedMotion ? "kora-ticket-enter" : ""
+                      } ${
+                        isFresh && !reducedMotion
+                          ? "border-amber-400 ring-2 ring-amber-400/35"
+                          : "border-amber-500/35"
+                      }`}
                     >
                       <div className="flex items-center justify-between border-b border-zinc-800 bg-amber-500/10 px-4 py-2.5">
                         <div className="flex items-baseline gap-2.5">
@@ -323,7 +387,8 @@ function ChefWorkspace({
                         </div>
                       </div>
                     </article>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </section>
@@ -566,38 +631,69 @@ function ChefWorkspace({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {(data?.menu_items ?? []).map((item) => (
-                <div
-                  key={item.id}
-                  className={`flex items-center justify-between gap-3 rounded-xl border p-3.5 ${
-                    item.is_available
-                      ? "border-zinc-800 bg-[#181C25]"
-                      : "border-rose-500/35 bg-rose-950/20"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">
-                      {item.name}
-                    </p>
-                    <p className="text-xs text-zinc-400">
-                      Prep {item.prep_minutes}m ·{" "}
-                      {item.is_available ? "In Stock" : "86'd (Unavailable)"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busyId === item.id}
-                    onClick={() => toggleAvailability(item)}
-                    className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
-                      item.is_available
-                        ? "bg-emerald-500/20 text-emerald-300 hover:bg-rose-500/20 hover:text-rose-300"
-                        : "bg-rose-500 text-white hover:bg-emerald-500 hover:text-zinc-950"
+              {(data?.menu_items ?? []).map((item) => {
+                const isOut =
+                  !item.is_available ||
+                  (typeof item.stock_count === "number" && item.stock_count <= 0);
+                const hasOpenFlag = (data?.low_stock_flags ?? []).some(
+                  (f) => f.menu_item_id === item.id && f.status === "open"
+                );
+                return (
+                  <div
+                    key={item.id}
+                    className={`flex flex-col justify-between gap-3 rounded-xl border p-3.5 ${
+                      !isOut
+                        ? "border-zinc-800 bg-[#181C25]"
+                        : "border-rose-500/35 bg-rose-950/20"
                     }`}
                   >
-                    {item.is_available ? "Available" : "Sold Out"}
-                  </button>
-                </div>
-              ))}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">
+                          {item.name}
+                        </p>
+                        <p className="mt-0.5 text-xs text-zinc-400">
+                          Prep {item.prep_minutes}m · Stock:{" "}
+                          <span className="font-mono font-semibold text-zinc-200">
+                            {item.stock_count ?? 0}
+                          </span>{" "}
+                          · {!isOut ? "In Stock" : "86'd (Sold Out)"}
+                        </p>
+                      </div>
+                      {hasOpenFlag && (
+                        <span className="shrink-0 rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                          Low Flagged
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFlagTarget(item);
+                          setFlagNote("");
+                        }}
+                        className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/20"
+                      >
+                        <Flag className="h-3.5 w-3.5" strokeWidth={1.7} />
+                        Flag low stock
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === item.id}
+                        onClick={() => toggleAvailability(item)}
+                        className={`min-h-[36px] shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                          !isOut
+                            ? "bg-emerald-500/20 text-emerald-300 hover:bg-rose-500/20 hover:text-rose-300"
+                            : "bg-rose-500 text-white hover:bg-emerald-500 hover:text-zinc-950"
+                        }`}
+                      >
+                        {!isOut ? "Available" : "Sold Out"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -659,6 +755,67 @@ function ChefWorkspace({
           </div>
         )}
       </main>
+
+      {/* LOW-STOCK FLAG MODAL */}
+      {flagTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-amber-500/35 bg-[#151921] p-6 text-zinc-100">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-400">
+                  <Flag className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  Flag Low Stock to Management
+                </p>
+                <h3 className="mt-1 text-base font-bold text-white">
+                  {flagTarget.name}
+                </h3>
+                <p className="mt-1 text-xs text-zinc-400">
+                  Current stock count: <span className="font-mono font-semibold text-zinc-200">{flagTarget.stock_count ?? 0}</span>. Owner and Manager receive an instant alert.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFlagTarget(null)}
+                className="text-zinc-400 hover:text-white"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4">
+              <label className="text-xs font-semibold text-zinc-300">
+                Optional kitchen note
+              </label>
+              <input
+                type="text"
+                value={flagNote}
+                onChange={(e) => setFlagNote(e.target.value)}
+                placeholder="e.g. Only 3 portions left for dinner rush"
+                className="mt-1.5 min-h-[42px] w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-white outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div className="mt-5 flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setFlagTarget(null)}
+                className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-xs font-semibold text-zinc-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={submittingFlag}
+                onClick={submitLowStockFlag}
+                className="flex-1 rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-zinc-950 hover:bg-amber-400 disabled:opacity-50"
+              >
+                {submittingFlag ? "Sending..." : "Send Low-Stock Flag"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* REJECTION REASON MODAL */}
       {rejectTarget && (

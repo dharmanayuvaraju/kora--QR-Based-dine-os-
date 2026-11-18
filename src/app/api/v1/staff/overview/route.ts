@@ -86,14 +86,17 @@ export async function GET() {
     .sort((a, b) => b.served_at.localeCompare(a.served_at))
     .slice(0, 20);
 
-  return NextResponse.json({
-    staff_name: auth.session.fullName,
-    ready_items,
-    tables,
-    bill_requests,
-    recently_served,
-    settings: db.settings,
-  });
+  return NextResponse.json(
+    {
+      staff_name: auth.session.fullName,
+      ready_items,
+      tables,
+      bill_requests,
+      recently_served,
+      settings: db.settings,
+    },
+    { headers: { "Cache-Control": "no-store, max-age=0" } }
+  );
   } finally {
     await flushDb();
   }

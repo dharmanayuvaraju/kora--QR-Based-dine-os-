@@ -5,9 +5,12 @@ import {
   AlertTriangle,
   BarChart3,
   BookOpen,
+  Check,
   ClipboardList,
   CreditCard,
+  Flag,
   LayoutGrid,
+  Minus,
   Package,
   Plus,
   QrCode,
@@ -30,6 +33,7 @@ import type {
   Expense,
   InventoryItem,
   InventoryMovement,
+  LowStockFlag,
   MenuCategory,
   MenuItem,
   Order,
@@ -45,6 +49,7 @@ import type {
 
 interface DashboardData {
   role: UserRole;
+  storage_mode?: "supabase-postgres" | "local-ephemeral";
   settings: RestaurantSettings;
   kpis: {
     gross_order_value: number;
@@ -63,6 +68,7 @@ interface DashboardData {
     occupied_tables_count: number;
     total_tables_count: number;
     low_stock_count: number;
+    open_low_stock_flags_count?: number;
   };
   top_dishes: Array<{ name: string; qty: number; revenue: number }>;
   tables: Array<
@@ -80,6 +86,7 @@ interface DashboardData {
   users: User[];
   inventory_items: InventoryItem[];
   inventory_movements: InventoryMovement[];
+  low_stock_flags: LowStockFlag[];
   expenses: Expense[];
   audit_logs: AuditLog[];
 }
@@ -145,6 +152,10 @@ export function ManagementSuite({
   const [stockType, setStockType] = useState<"restock" | "deduction" | "wastage">("restock");
   const [stockQty, setStockQty] = useState("5");
   const [stockNote, setStockNote] = useState("");
+  const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [auditPage, setAuditPage] = useState(1);
+  const PAGE_SIZE = 15;
 
   const notify = (text: string, tone: "ok" | "err" = "ok") => {
     setNotice({ text, tone });
@@ -169,7 +180,11 @@ export function ManagementSuite({
     loadDashboard();
   });
 
-  const navItems: Array<{ id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }> =
+  const navItems: Array<{
+    id: TabId;
+    label: string;
+    icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  }> =
     isOwner
       ? [
           { id: "overview", label: "Overview", icon: BarChart3 },
@@ -218,6 +233,94 @@ export function ManagementSuite({
   const staffUsers = (data?.users ?? []).filter(
     (u) => u.role === "staff" && u.is_active
   );
+  const openFlags = (data?.low_stock_flags ?? []).filter((f) => f.status === "open");
+
+  const updateDishStock = async (
+    item: MenuItem,
+    payload: { stock_count?: number; delta?: number }
+  ) => {
+    const ok = await apiCall(
+      `/api/v1/menu/items/${item.id}/stock`,
+      "PATCH",
+      payload,
+      `Updated stock for ${item.name}`
+    );
+    if (ok) {
+      setStockDrafts((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+    }
+  };
+
+  const renderLowStockAlerts = () => {
+    if (openFlags.length === 0) return null;
+    return (
+      <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex items-center gap-2 text-sm font-bold text-amber-950">
+            <Flag className="h-4 w-4 text-amber-700" strokeWidth={1.8} />
+            Kitchen Low-Stock Alerts ({openFlags.length})
+          </p>
+          <span className="rounded-full bg-amber-200/80 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+            Flagged by Chef
+          </span>
+        </div>
+        <div className="mt-3 space-y-2">
+          {openFlags.map((flag) => {
+            const liveItem = data?.menu_items.find((m) => m.id === flag.menu_item_id);
+            const liveCount = liveItem ? liveItem.stock_count ?? 0 : flag.current_stock_count;
+            return (
+              <div
+                key={flag.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white p-3 text-xs"
+              >
+                <div className="min-w-0">
+                  <p className="font-semibold text-stone-900">
+                    {flag.menu_item_name}{" "}
+                    <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11px] text-amber-900">
+                      Stock: {liveCount}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-stone-600">
+                    &ldquo;{flag.note}&rdquo; · Flagged by{" "}
+                    <strong>{flag.flagged_by_name}</strong> at{" "}
+                    {formatTimeShort(flag.created_at)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {liveItem && (
+                    <button
+                      type="button"
+                      onClick={() => updateDishStock(liveItem, { delta: 10 })}
+                      className="min-h-[34px] rounded-lg border border-stone-200 px-2.5 text-[11px] font-semibold text-stone-800 hover:bg-stone-100"
+                    >
+                      +10 Stock
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      apiCall(
+                        `/api/v1/low-stock-flags/${flag.id}/resolve`,
+                        "POST",
+                        undefined,
+                        `Resolved low-stock flag for ${flag.menu_item_name}`
+                      )
+                    }
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-emerald-700 px-3 text-[11px] font-semibold text-white hover:bg-emerald-800"
+                  >
+                    <Check className="h-3.5 w-3.5" /> Resolve
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[#F6F7F8] pb-20 text-stone-900 lg:pb-0">
@@ -246,8 +349,13 @@ export function ManagementSuite({
                       : "text-stone-600 hover:bg-white hover:text-stone-900"
                   }`}
                 >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  {item.label}
+                  <Icon className="h-4 w-4 shrink-0" strokeWidth={1.65} />
+                  <span>{item.label}</span>
+                  {item.id === "menu" && openFlags.length > 0 && (
+                    <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 font-mono text-[10px] font-bold text-stone-950">
+                      {openFlags.length}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -274,6 +382,7 @@ export function ManagementSuite({
           {/* ==================== OVERVIEW ==================== */}
           {tab === "overview" && data && (
             <>
+              {renderLowStockAlerts()}
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl border border-stone-200 bg-white p-5">
                   <p className="text-xs font-medium text-stone-500">Net Collected Revenue</p>
@@ -514,7 +623,7 @@ export function ManagementSuite({
                             `/api/v1/tables/${t.id}/qr/regenerate`,
                             "POST",
                             undefined,
-                            `Regenerated QR token for ${t.table_number} — previous QR invalidated`
+                            `Regenerated QR token for ${t.table_number}. Previous QR invalidated.`
                           );
                           setRegeneratingId(null);
                         }}
@@ -612,82 +721,112 @@ export function ManagementSuite({
 
           {/* ==================== ORDERS MONITOR ==================== */}
           {tab === "orders" && data && (
-            <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[680px] text-left text-xs">
-                  <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
-                    <tr>
-                      <th className="px-4 py-3">Order</th>
-                      <th className="px-4 py-3">Table</th>
-                      <th className="px-4 py-3">Items &amp; Status</th>
-                      <th className="px-4 py-3">Total</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {data.orders.map((order) => (
-                      <tr key={order.id} className="align-top">
-                        <td className="px-4 py-3 font-mono font-bold text-stone-900">
-                          #{order.order_number}
-                          <p className="font-sans text-[11px] font-normal text-stone-400">
-                            {formatTimeShort(order.created_at)}
-                          </p>
-                        </td>
-                        <td className="px-4 py-3 font-semibold">{order.table_number}</td>
-                        <td className="px-4 py-3">
-                          <div className="space-y-1">
-                            {order.items.map((i) => (
-                              <div key={i.id} className="flex items-center gap-2">
-                                <span>
-                                  {i.quantity}× {i.item_name_snapshot}
-                                </span>
-                                <StatusBadge status={i.status} compact />
-                              </div>
-                            ))}
-                            {order.rejection_reason && (
-                              <p className="text-rose-700">
-                                Chef Rejection: {order.rejection_reason}
-                              </p>
-                            )}
-                            {order.cancellation_reason && (
-                              <p className="text-rose-700">
-                                Cancelled: {order.cancellation_reason}
-                              </p>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 font-mono font-semibold">
-                          {formatCurrency(order.total_amount)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <StatusBadge status={order.status} compact />
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {!["completed", "cancelled", "rejected"].includes(order.status) && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCancelOrderTarget(order);
-                                setCancelReason("");
-                              }}
-                              className="rounded-lg border border-rose-200 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
-                            >
-                              Authorize Cancel
-                            </button>
-                          )}
-                        </td>
+            <div className="space-y-3">
+              <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[680px] text-left text-xs">
+                    <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
+                      <tr>
+                        <th className="px-4 py-3">Order</th>
+                        <th className="px-4 py-3">Table</th>
+                        <th className="px-4 py-3">Items &amp; Status</th>
+                        <th className="px-4 py-3">Total</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {data.orders
+                        .slice((ordersPage - 1) * PAGE_SIZE, ordersPage * PAGE_SIZE)
+                        .map((order) => (
+                          <tr key={order.id} className="align-top">
+                            <td className="px-4 py-3 font-mono font-bold text-stone-900">
+                              #{order.order_number}
+                              <p className="font-sans text-[11px] font-normal text-stone-400">
+                                {formatTimeShort(order.created_at)}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 font-semibold">{order.table_number}</td>
+                            <td className="px-4 py-3">
+                              <div className="space-y-1">
+                                {order.items.map((i) => (
+                                  <div key={i.id} className="flex items-center gap-2">
+                                    <span>
+                                      {i.quantity}× {i.item_name_snapshot}
+                                    </span>
+                                    <StatusBadge status={i.status} compact />
+                                  </div>
+                                ))}
+                                {order.rejection_reason && (
+                                  <p className="text-rose-700">
+                                    Chef Rejection: {order.rejection_reason}
+                                  </p>
+                                )}
+                                {order.cancellation_reason && (
+                                  <p className="text-rose-700">
+                                    Cancelled: {order.cancellation_reason}
+                                  </p>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 font-mono font-semibold">
+                              {formatCurrency(order.total_amount)}
+                            </td>
+                            <td className="px-4 py-3">
+                              <StatusBadge status={order.status} compact />
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              {!["completed", "cancelled", "rejected"].includes(order.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCancelOrderTarget(order);
+                                    setCancelReason("");
+                                  }}
+                                  className="rounded-lg border border-rose-200 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+                                >
+                                  Authorize Cancel
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
+              {data.orders.length > PAGE_SIZE && (
+                <div className="flex items-center justify-between text-xs text-stone-600">
+                  <span>
+                    Page {ordersPage} of {Math.ceil(data.orders.length / PAGE_SIZE)} ({data.orders.length} orders)
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={ordersPage <= 1}
+                      onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-semibold disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={ordersPage * PAGE_SIZE >= data.orders.length}
+                      onClick={() => setOrdersPage((p) => p + 1)}
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-semibold disabled:opacity-40"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* ==================== MENU & PRICING MANAGEMENT ==================== */}
           {tab === "menu" && data && (
             <div className="space-y-5">
+              {renderLowStockAlerts()}
               {isOwner && (
                 <form
                   onSubmit={async (e) => {
@@ -770,15 +909,17 @@ export function ManagementSuite({
                 </form>
               )}
 
-              {/* Mobile stacked cards (<640px) so every status & control is fully reachable */}
+              {/* Mobile stacked cards (<640px) with stock count steppers & controls */}
               <div className="space-y-3 sm:hidden">
                 {data.menu_items.map((item) => {
                   const catName =
-                    data.categories.find((c) => c.id === item.category_id)?.name ?? "—";
+                    data.categories.find((c) => c.id === item.category_id)?.name ?? "-";
+                  const countVal = stockDrafts[item.id] ?? String(item.stock_count ?? 0);
+                  const isOut = !item.is_available || (item.stock_count ?? 0) <= 0;
                   return (
                     <div
                       key={item.id}
-                      className="rounded-2xl border border-stone-200 bg-white p-4 shadow-xs"
+                      className="rounded-2xl border border-stone-200 bg-white p-4"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-start gap-2">
@@ -799,13 +940,59 @@ export function ManagementSuite({
                         </div>
                         <span
                           className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                            item.is_available
+                            !isOut
                               ? "bg-emerald-50 text-emerald-800"
                               : "bg-rose-50 text-rose-800"
                           }`}
                         >
-                          {item.is_available ? "Available" : "Sold Out (86)"}
+                          {!isOut ? "Available" : "Sold Out"}
                         </span>
+                      </div>
+
+                      {/* Stock Count Stepper + Direct Number Input */}
+                      <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-stone-50 px-3 py-2">
+                        <span className="text-xs font-semibold text-stone-600">
+                          Stock Portions
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateDishStock(item, { delta: -1 })}
+                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-700"
+                            aria-label={`Decrease stock for ${item.name}`}
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            value={countVal}
+                            onChange={(e) =>
+                              setStockDrafts((d) => ({ ...d, [item.id]: e.target.value }))
+                            }
+                            onBlur={() => {
+                              const parsed = Number(countVal);
+                              if (Number.isFinite(parsed) && parsed !== (item.stock_count ?? 0)) {
+                                updateDishStock(item, { stock_count: Math.max(0, Math.floor(parsed)) });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                (e.target as HTMLInputElement).blur();
+                              }
+                            }}
+                            className="h-9 w-16 rounded-lg border border-stone-200 bg-white text-center font-mono text-xs font-semibold"
+                            aria-label={`Stock count for ${item.name}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateDishStock(item, { delta: 1 })}
+                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-700"
+                            aria-label={`Increase stock for ${item.name}`}
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
 
                       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-3">
@@ -819,7 +1006,7 @@ export function ManagementSuite({
                               `${item.name} marked ${!item.is_available ? "Available" : "Sold Out"}`
                             )
                           }
-                          className="flex-1 rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                          className="min-h-[38px] flex-1 rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
                         >
                           {item.is_available ? "Mark 86" : "Restore"}
                         </button>
@@ -840,7 +1027,7 @@ export function ManagementSuite({
                                   `Updated price of ${item.name} to ₹${nextPrice}`
                                 );
                               }}
-                              className="rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                              className="min-h-[38px] rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
                             >
                               Edit ₹
                             </button>
@@ -856,7 +1043,7 @@ export function ManagementSuite({
                                   `Archived ${item.name}`
                                 );
                               }}
-                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                              className="min-h-[38px] rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
                             >
                               Archive
                             </button>
@@ -868,15 +1055,16 @@ export function ManagementSuite({
                 })}
               </div>
 
-              {/* Desktop / Tablet horizontally-scrollable table */}
+              {/* Desktop / Tablet horizontally-scrollable table with stock steppers */}
               <div className="hidden overflow-hidden rounded-2xl border border-stone-200 bg-white sm:block">
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[660px] text-left text-xs">
+                  <table className="w-full min-w-[780px] text-left text-xs">
                     <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
                       <tr>
                         <th className="px-4 py-3">Dish</th>
                         <th className="px-4 py-3">Category</th>
                         <th className="px-4 py-3">Price</th>
+                        <th className="px-4 py-3">Stock Count</th>
                         <th className="px-4 py-3">Status</th>
                         <th className="px-4 py-3 text-right">Controls</th>
                       </tr>
@@ -884,7 +1072,9 @@ export function ManagementSuite({
                     <tbody className="divide-y divide-stone-100">
                       {data.menu_items.map((item) => {
                         const catName =
-                          data.categories.find((c) => c.id === item.category_id)?.name ?? "—";
+                          data.categories.find((c) => c.id === item.category_id)?.name ?? "-";
+                        const countVal = stockDrafts[item.id] ?? String(item.stock_count ?? 0);
+                        const isOut = !item.is_available || (item.stock_count ?? 0) <= 0;
                         return (
                           <tr key={item.id}>
                             <td className="px-4 py-3">
@@ -905,14 +1095,60 @@ export function ManagementSuite({
                               {formatCurrency(item.price)}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3">
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => updateDishStock(item, { delta: -1 })}
+                                  className="flex h-7 w-7 items-center justify-center rounded-md border border-stone-200 text-stone-700 hover:bg-stone-100"
+                                  aria-label={`Decrease stock for ${item.name}`}
+                                >
+                                  <Minus className="h-3 w-3" />
+                                </button>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={countVal}
+                                  onChange={(e) =>
+                                    setStockDrafts((d) => ({ ...d, [item.id]: e.target.value }))
+                                  }
+                                  onBlur={() => {
+                                    const parsed = Number(countVal);
+                                    if (
+                                      Number.isFinite(parsed) &&
+                                      parsed !== (item.stock_count ?? 0)
+                                    ) {
+                                      updateDishStock(item, {
+                                        stock_count: Math.max(0, Math.floor(parsed)),
+                                      });
+                                    }
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      (e.target as HTMLInputElement).blur();
+                                    }
+                                  }}
+                                  className="h-7 w-14 rounded-md border border-stone-200 text-center font-mono text-xs font-semibold"
+                                  aria-label={`Stock count for ${item.name}`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => updateDishStock(item, { delta: 1 })}
+                                  className="flex h-7 w-7 items-center justify-center rounded-md border border-stone-200 text-stone-700 hover:bg-stone-100"
+                                  aria-label={`Increase stock for ${item.name}`}
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </button>
+                              </div>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3">
                               <span
                                 className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  item.is_available
+                                  !isOut
                                     ? "bg-emerald-50 text-emerald-800"
                                     : "bg-rose-50 text-rose-800"
                                 }`}
                               >
-                                {item.is_available ? "Available" : "Sold Out (86)"}
+                                {!isOut ? "Available" : "Sold Out"}
                               </span>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-right">
@@ -1474,40 +1710,69 @@ export function ManagementSuite({
 
           {/* ==================== AUDIT LOGS ==================== */}
           {tab === "audit" && data && (
-            <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-              <div className="border-b border-stone-100 px-5 py-3.5">
-                <h2 className="text-sm font-bold text-stone-900">
-                  Immutable Audit Trail ({data.audit_logs.length} events)
-                </h2>
-                <p className="text-xs text-stone-500">
-                  Every refund, cancellation, QR regeneration, override, and manual payment
-                  is permanently recorded.
-                </p>
+            <div className="space-y-3">
+              <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                <div className="border-b border-stone-100 px-5 py-3.5">
+                  <h2 className="text-sm font-bold text-stone-900">
+                    Immutable Audit Trail ({data.audit_logs.length} events)
+                  </h2>
+                  <p className="text-xs text-stone-500">
+                    Every refund, cancellation, QR regeneration, stock change, and manual
+                    payment is permanently recorded.
+                  </p>
+                </div>
+                <div className="divide-y divide-stone-100 text-xs">
+                  {data.audit_logs
+                    .slice((auditPage - 1) * PAGE_SIZE, auditPage * PAGE_SIZE)
+                    .map((log) => (
+                      <div
+                        key={log.id}
+                        className="flex flex-wrap items-center justify-between gap-2 px-5 py-3"
+                      >
+                        <div className="min-w-0">
+                          <span className="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-stone-800">
+                            {log.action}
+                          </span>
+                          <span className="ml-2 font-medium text-stone-800">
+                            {log.actor_name}{" "}
+                            <span className="uppercase text-stone-400">({log.actor_role})</span>
+                          </span>
+                          <p className="mt-1 break-all font-mono text-[11px] text-stone-500">
+                            {JSON.stringify(log.metadata)}
+                          </p>
+                        </div>
+                        <span className="font-mono text-[11px] text-stone-400">
+                          {formatTimeShort(log.created_at)}
+                        </span>
+                      </div>
+                    ))}
+                </div>
               </div>
-              <div className="divide-y divide-stone-100 text-xs">
-                {data.audit_logs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="flex flex-wrap items-center justify-between gap-2 px-5 py-3"
-                  >
-                    <div>
-                      <span className="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-stone-800">
-                        {log.action}
-                      </span>
-                      <span className="ml-2 font-medium text-stone-800">
-                        {log.actor_name}{" "}
-                        <span className="uppercase text-stone-400">({log.actor_role})</span>
-                      </span>
-                      <p className="mt-1 font-mono text-[11px] text-stone-500">
-                        {JSON.stringify(log.metadata)}
-                      </p>
-                    </div>
-                    <span className="font-mono text-[11px] text-stone-400">
-                      {formatTimeShort(log.created_at)}
-                    </span>
+              {data.audit_logs.length > PAGE_SIZE && (
+                <div className="flex items-center justify-between text-xs text-stone-600">
+                  <span>
+                    Page {auditPage} of {Math.ceil(data.audit_logs.length / PAGE_SIZE)}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={auditPage <= 1}
+                      onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-semibold disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={auditPage * PAGE_SIZE >= data.audit_logs.length}
+                      onClick={() => setAuditPage((p) => p + 1)}
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-semibold disabled:opacity-40"
+                    >
+                      Next
+                    </button>
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1675,7 +1940,7 @@ export function ManagementSuite({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6">
             <h3 className="text-base font-bold text-stone-900">
-              Issue Refund — {refundTarget.receipt_number}
+              Issue Refund ({refundTarget.receipt_number})
             </h3>
             <p className="mt-1 text-xs text-stone-500">
               Original payment: {formatCurrency(refundTarget.amount)} ({refundTarget.table_number})
@@ -1740,7 +2005,7 @@ export function ManagementSuite({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6">
             <h3 className="text-base font-bold text-stone-900">
-              Adjust Stock — {stockModal.name}
+              Adjust Stock: {stockModal.name}
             </h3>
             <p className="mt-1 text-xs text-stone-500">
               Current level: {stockModal.current_stock} {stockModal.unit}

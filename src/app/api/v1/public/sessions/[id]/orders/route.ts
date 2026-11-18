@@ -28,10 +28,13 @@ export async function GET(
   try {
     const { id } = await context.params;
     const bill = getSessionBillSummary(id);
-    return NextResponse.json({
-      orders: bill.orders,
-      bill,
-    });
+    return NextResponse.json(
+      {
+        orders: bill.orders,
+        bill,
+      },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Session not found" },

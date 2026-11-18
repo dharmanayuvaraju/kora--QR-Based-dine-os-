@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, QrCode, Smartphone, UtensilsCrossed } from "lucide-react";
+import { ArrowLeft, ArrowRight, QrCode, Smartphone } from "lucide-react";
+import { KoraMark } from "@/components/KoraMark";
 
 export default function CustomerEntryPage() {
   const router = useRouter();
@@ -14,7 +15,6 @@ export default function CustomerEntryPage() {
     e.preventDefault();
     const cleaned = tokenInput.trim();
     if (!cleaned) return;
-    // Allow pasting either a full /menu/t/<token> URL or the raw UUID token
     const match = cleaned.match(/\/menu\/t\/([a-zA-Z0-9-]+)/);
     const token = match ? match[1] : cleaned;
     if (token.length < 8) {
@@ -26,24 +26,22 @@ export default function CustomerEntryPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FAF7F2] px-4 py-8 text-[#1C1917] sm:px-6">
+    <div className="kora-grain min-h-screen bg-[#FAF7F2] px-4 py-8 text-[#1C1917] sm:px-6">
       <div className="mx-auto max-w-lg">
         <div className="flex items-center justify-between">
           <Link
             href="/"
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-stone-600 hover:text-stone-900"
+            className="inline-flex min-h-[38px] items-center gap-1.5 text-xs font-medium text-stone-600 hover:text-stone-900"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Hub
+            <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} /> Back to Hub
           </Link>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-medium text-stone-600 shadow-xs">
-            <QrCode className="h-3.5 w-3.5 text-[#C2410C]" /> Table QR Required
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#E5DDD2] bg-white px-3 py-1 text-xs font-medium text-stone-600">
+            <QrCode className="h-3.5 w-3.5 text-[#C2410C]" strokeWidth={1.65} /> Table QR Required
           </span>
         </div>
 
-        <div className="mt-8 rounded-3xl border border-[#E8E1D6] bg-white p-6 shadow-xs sm:p-8">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#C2410C] text-white">
-            <UtensilsCrossed className="h-6 w-6" />
-          </div>
+        <div className="mt-8 rounded-3xl border border-[#E8E1D6] bg-white p-6 sm:p-8">
+          <KoraMark className="h-12 w-12" />
 
           <h1 className="mt-5 font-serif text-2xl font-semibold text-stone-900 sm:text-3xl">
             Scan the QR code at your table
@@ -55,7 +53,7 @@ export default function CustomerEntryPage() {
 
           <div className="mt-6 space-y-3 rounded-2xl bg-[#FAF7F2] p-4 text-xs text-stone-700">
             <div className="flex items-start gap-2.5">
-              <Smartphone className="mt-0.5 h-4 w-4 shrink-0 text-[#C2410C]" />
+              <Smartphone className="mt-0.5 h-4 w-4 shrink-0 text-[#C2410C]" strokeWidth={1.65} />
               <div>
                 <p className="font-semibold text-stone-900">1. Scan your tabletop QR</p>
                 <p className="mt-0.5 text-stone-600">
@@ -65,7 +63,7 @@ export default function CustomerEntryPage() {
               </div>
             </div>
             <div className="flex items-start gap-2.5">
-              <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-[#C2410C]" />
+              <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-[#C2410C]" strokeWidth={1.65} />
               <div>
                 <p className="font-semibold text-stone-900">
                   2. Order, track live &amp; settle one combined bill
@@ -95,14 +93,14 @@ export default function CustomerEntryPage() {
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
                 placeholder="Paste /menu/t/... URL or token"
-                className="min-w-0 flex-1 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs outline-none focus:border-[#C2410C] focus:bg-white"
+                className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs outline-none focus:border-[#C2410C] focus:bg-white"
               />
               <button
                 type="submit"
-                className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-stone-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#C2410C]"
+                className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-xl bg-stone-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#C2410C]"
               >
                 Open
-                <ArrowRight className="h-3.5 w-3.5" />
+                <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
               </button>
             </div>
             {error && <p className="mt-2 text-xs font-medium text-rose-600">{error}</p>}
