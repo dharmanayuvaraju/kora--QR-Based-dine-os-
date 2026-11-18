@@ -26,7 +26,7 @@ import { ConsoleHeader } from "@/components/ConsoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { QrCodeCard } from "@/components/QrCodeCard";
 import { DietaryMark } from "@/components/DietaryMark";
-import { useRealtime } from "@/hooks/useRealtime";
+import { notifyLocalTabs, useRealtime } from "@/hooks/useRealtime";
 import { formatCurrency, formatTimeShort } from "@/lib/utils";
 import type {
   AuditLog,
@@ -163,7 +163,7 @@ export function ManagementSuite({
   };
 
   const loadDashboard = useCallback(async () => {
-    const res = await fetch("/api/v1/owner/dashboard", { cache: "no-store" });
+    const res = await fetch(`/api/v1/owner/dashboard?t=${Date.now()}`, { cache: "no-store" });
     if (res.ok) {
       const json = (await res.json()) as DashboardData;
       setData(json);
@@ -226,6 +226,10 @@ export function ManagementSuite({
       return false;
     }
     if (successMsg) notify(successMsg, "ok");
+    notifyLocalTabs({
+      type: url.includes("low-stock") || url.includes("inventory") ? "inventory.updated" : "menu.updated",
+      message: successMsg ?? "Live dashboard update",
+    });
     await loadDashboard();
     return true;
   };
@@ -311,7 +315,7 @@ export function ManagementSuite({
                     }
                     className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-emerald-700 px-3 text-[11px] font-semibold text-white hover:bg-emerald-800"
                   >
-                    <Check className="h-3.5 w-3.5" /> Resolve
+                    <Check className="h-3.5 w-3.5" strokeWidth={1.65} /> Resolve
                   </button>
                 </div>
               </div>
@@ -374,7 +378,7 @@ export function ManagementSuite({
             >
               <span>{notice.text}</span>
               <button type="button" onClick={() => setNotice(null)}>
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.65} />
               </button>
             </div>
           )}
@@ -441,7 +445,7 @@ export function ManagementSuite({
                 {/* Payment Split & Channel Breakdown */}
                 <div className="rounded-2xl border border-stone-200 bg-white p-5 lg:col-span-5">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-stone-900">
-                    <TrendingUp className="h-4 w-4 text-[#C2410C]" />
+                    <TrendingUp className="h-4 w-4 text-[#C2410C]" strokeWidth={1.65} />
                     Payment Channel Mix
                   </h2>
                   <div className="mt-4 space-y-4">
@@ -482,7 +486,7 @@ export function ManagementSuite({
                   {data.kpis.low_stock_count > 0 && (
                     <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900">
                       <p className="flex items-center gap-1.5 font-semibold">
-                        <AlertTriangle className="h-4 w-4" />
+                        <AlertTriangle className="h-4 w-4" strokeWidth={1.65} />
                         {data.kpis.low_stock_count} Ingredient
                         {data.kpis.low_stock_count === 1 ? "" : "s"} Low on Stock
                       </p>
@@ -599,7 +603,7 @@ export function ManagementSuite({
                   type="submit"
                   className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C]"
                 >
-                  <Plus className="h-3.5 w-3.5" /> Add Table + QR
+                  <Plus className="h-3.5 w-3.5" strokeWidth={1.65} /> Add Table + QR
                 </button>
               </form>
 
@@ -904,7 +908,7 @@ export function ManagementSuite({
                     type="submit"
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C] sm:col-span-2 lg:col-span-6"
                   >
-                    <Plus className="h-3.5 w-3.5" /> Add New Dish to Digital Menu
+                    <Plus className="h-3.5 w-3.5" strokeWidth={1.65} /> Add New Dish to Digital Menu
                   </button>
                 </form>
               )}
@@ -961,7 +965,7 @@ export function ManagementSuite({
                             className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-700"
                             aria-label={`Decrease stock for ${item.name}`}
                           >
-                            <Minus className="h-3.5 w-3.5" />
+                            <Minus className="h-3.5 w-3.5" strokeWidth={1.65} />
                           </button>
                           <input
                             type="number"
@@ -990,7 +994,7 @@ export function ManagementSuite({
                             className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-700"
                             aria-label={`Increase stock for ${item.name}`}
                           >
-                            <Plus className="h-3.5 w-3.5" />
+                            <Plus className="h-3.5 w-3.5" strokeWidth={1.65} />
                           </button>
                         </div>
                       </div>
@@ -1102,7 +1106,7 @@ export function ManagementSuite({
                                   className="flex h-7 w-7 items-center justify-center rounded-md border border-stone-200 text-stone-700 hover:bg-stone-100"
                                   aria-label={`Decrease stock for ${item.name}`}
                                 >
-                                  <Minus className="h-3 w-3" />
+                                  <Minus className="h-3 w-3" strokeWidth={1.65} />
                                 </button>
                                 <input
                                   type="number"
@@ -1136,7 +1140,7 @@ export function ManagementSuite({
                                   className="flex h-7 w-7 items-center justify-center rounded-md border border-stone-200 text-stone-700 hover:bg-stone-100"
                                   aria-label={`Increase stock for ${item.name}`}
                                 >
-                                  <Plus className="h-3 w-3" />
+                                  <Plus className="h-3 w-3" strokeWidth={1.65} />
                                 </button>
                               </div>
                             </td>
@@ -1280,7 +1284,7 @@ export function ManagementSuite({
                                 }}
                                 className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
                               >
-                                <RotateCcw className="h-3 w-3" /> Issue Refund
+                                <RotateCcw className="h-3 w-3" strokeWidth={1.65} /> Issue Refund
                               </button>
                             )}
                           </td>

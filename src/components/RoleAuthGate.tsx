@@ -147,7 +147,7 @@ export function RoleAuthGate({
                   : "bg-stone-100 text-stone-700"
               }`}
             >
-              <ShieldCheck className="h-3.5 w-3.5 text-[#C2410C]" />
+              <ShieldCheck className="h-3.5 w-3.5 text-[#C2410C]" strokeWidth={1.65} />
               Role Gated
             </span>
           </div>
@@ -162,7 +162,7 @@ export function RoleAuthGate({
                 }`}
               >
                 <p className="flex items-center gap-1.5 text-sm font-semibold">
-                  <ShieldAlert className="h-4 w-4 shrink-0" />
+                  <ShieldAlert className="h-4 w-4 shrink-0" strokeWidth={1.65} />
                   Access Restricted
                 </p>
                 <p className="mt-1.5 leading-relaxed opacity-90">
@@ -182,7 +182,7 @@ export function RoleAuthGate({
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#C2410C] py-2.5 text-sm font-semibold text-white transition hover:bg-[#9A3412]"
                 >
                   Open My {ROLE_META[user.role].label} Console
-                  <ArrowRight className="h-4 w-4" />
+                  <ArrowRight className="h-4 w-4" strokeWidth={1.65} />
                 </Link>
                 <button
                   type="button"
@@ -193,7 +193,7 @@ export function RoleAuthGate({
                       : "border-stone-200 text-stone-700 hover:bg-stone-50"
                   }`}
                 >
-                  <LogOut className="h-3.5 w-3.5" />
+                  <LogOut className="h-3.5 w-3.5" strokeWidth={1.65} />
                   Sign out to log in with a different role
                 </button>
               </div>
@@ -213,7 +213,7 @@ export function RoleAuthGate({
                   <Mail
                     className={`pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 ${
                       isDark ? "text-zinc-500" : "text-stone-400"
-                    }`}
+                    }`} strokeWidth={1.65}
                   />
                   <input
                     id="staff-email"
@@ -246,7 +246,7 @@ export function RoleAuthGate({
                   <Lock
                     className={`pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 ${
                       isDark ? "text-zinc-500" : "text-stone-400"
-                    }`}
+                    }`} strokeWidth={1.65}
                   />
                   <input
                     id="staff-password"
@@ -271,7 +271,7 @@ export function RoleAuthGate({
                     }`}
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showPassword ? <EyeOff className="h-4 w-4" strokeWidth={1.65} /> : <Eye className="h-4 w-4" strokeWidth={1.65} />}
                   </button>
                 </div>
               </div>

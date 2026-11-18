@@ -182,7 +182,7 @@ const DishCard = memo(function DishCard({
                 onClick={() => onQuickAdd(item, imgWrapRef.current)}
                 className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center gap-1 rounded-xl bg-[#1C1917] px-4 text-xs font-semibold text-white transition hover:bg-[#C2410C] active:scale-[0.98]"
               >
-                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                <Plus className="h-3.5 w-3.5" strokeWidth={1.7} />
                 Add{qtyInCart > 0 ? ` (${qtyInCart})` : ""}
               </button>
             </div>
@@ -892,7 +892,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               type="button"
               data-cat-chip="all"
               onClick={() => jumpToCategory("all")}
-              className={`min-h-[38px] shrink-0 rounded-full px-3.5 text-xs font-semibold transition ${
+              className={`min-h-[44px] shrink-0 rounded-full px-4 text-xs font-semibold transition ${
                 activeScrollCategory === "all"
                   ? "bg-[#C2410C] text-white"
                   : "border border-[#E5DDD2] bg-white text-stone-700"
@@ -906,7 +906,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 type="button"
                 data-cat-chip={cat.id}
                 onClick={() => jumpToCategory(cat.id)}
-                className={`min-h-[38px] shrink-0 rounded-full px-3.5 text-xs font-semibold transition ${
+                className={`min-h-[44px] shrink-0 rounded-full px-4 text-xs font-semibold transition ${
                   activeScrollCategory === cat.id
                     ? "bg-[#C2410C] text-white"
                     : "border border-[#E5DDD2] bg-white text-stone-700"
@@ -1471,7 +1471,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-white/10"
               aria-label="Dismiss message"
             >
-              <X className="h-3.5 w-3.5 opacity-80" strokeWidth={2} />
+              <X className="h-3.5 w-3.5 opacity-80" strokeWidth={1.7} />
             </button>
           </div>
         </div>

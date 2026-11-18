@@ -53,6 +53,25 @@ const LEGACY_IMAGE_MAP: Record<string, string> = {
   "Warm Saffron Rasmalai Tres Leches": "/dishes/saffron-rasmalai.jpg",
 };
 
+const STALE_PROCESSING_MS = 5 * 60_000; // 5 minutes
+
+function reconcileStaleProcessingPayments(state: DatabaseState): boolean {
+  let changed = false;
+  const now = Date.now();
+  const closedSessionIds = new Set(
+    state.table_sessions.filter((s) => s.status === "closed").map((s) => s.id)
+  );
+  for (const p of state.payments) {
+    if (p.status !== "processing") continue;
+    const ageMs = now - new Date(p.created_at).getTime();
+    if (closedSessionIds.has(p.session_id) || ageMs > STALE_PROCESSING_MS) {
+      p.status = "failed";
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function healLegacyState(state: DatabaseState): boolean {
   let changed = false;
   for (const item of state.menu_items) {
@@ -78,6 +97,9 @@ function healLegacyState(state: DatabaseState): boolean {
       p.collected_by_name = "Demo Online (Card)";
       changed = true;
     }
+  }
+  if (reconcileStaleProcessingPayments(state)) {
+    changed = true;
   }
   return changed;
 }
@@ -467,6 +489,13 @@ export function closeTableSession(
     if (order.session_id === sessionId && order.status === "served") {
       order.status = "completed";
       order.updated_at = new Date().toISOString();
+    }
+  }
+
+  // Expire any abandoned in-flight processing payment attempts on this closed session
+  for (const p of db.payments) {
+    if (p.session_id === sessionId && p.status === "processing") {
+      p.status = "failed";
     }
   }
 
@@ -1253,6 +1282,13 @@ export function initiateOnlinePayment(
     }
   }
 
+  // Mark any earlier abandoned processing attempt for this session as failed so no orphaned PROCESSING rows accumulate
+  for (const p of db.payments) {
+    if (p.session_id === sessionId && p.status === "processing") {
+      p.status = "failed";
+    }
+  }
+
   const amount = roundMoney(
     amountInput && amountInput > 0 ? Math.min(amountInput, bill.balance_due) : bill.balance_due
   );
@@ -1340,6 +1376,13 @@ export function verifyAndCompleteOnlinePayment(params: {
   tx.gateway_payment_id = params.gatewayPaymentId;
   tx.gateway_signature = params.gatewaySignature;
   tx.signature_verified = true;
+
+  // Expire any other unfinished processing attempts on the same session
+  for (const other of db.payments) {
+    if (other.session_id === payment.session_id && other.id !== payment.id && other.status === "processing") {
+      other.status = "failed";
+    }
+  }
 
   addAudit(
     db,

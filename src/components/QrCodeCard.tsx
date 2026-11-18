@@ -116,7 +116,7 @@ export function QrCodeCard({
           rel="noreferrer"
           className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-stone-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-stone-800"
         >
-          <ExternalLink className="h-3.5 w-3.5" />
+          <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.65} />
           Open Menu
         </a>
         <button
@@ -125,7 +125,7 @@ export function QrCodeCard({
           className="inline-flex items-center justify-center rounded-lg border border-stone-200 p-1.5 text-stone-700 hover:bg-stone-100"
           title="Print Tabletop QR Standee"
         >
-          <Printer className="h-3.5 w-3.5" />
+          <Printer className="h-3.5 w-3.5" strokeWidth={1.65} />
         </button>
         <button
           type="button"
@@ -133,7 +133,7 @@ export function QrCodeCard({
           className="inline-flex items-center justify-center rounded-lg border border-stone-200 p-1.5 text-stone-700 hover:bg-stone-100"
           title="Download PNG"
         >
-          <Download className="h-3.5 w-3.5" />
+          <Download className="h-3.5 w-3.5" strokeWidth={1.65} />
         </button>
         {onRegenerate && (
           <button
@@ -143,7 +143,7 @@ export function QrCodeCard({
             className="inline-flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 p-1.5 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
             title="Regenerate QR Token (invalidates old QR)"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${regenerating ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-3.5 w-3.5 ${regenerating ? "animate-spin" : ""}`} strokeWidth={1.65} />
           </button>
         )}
       </div>

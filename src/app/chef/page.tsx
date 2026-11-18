@@ -17,7 +17,7 @@ import {
 import { RoleAuthGate } from "@/components/RoleAuthGate";
 import { ConsoleHeader } from "@/components/ConsoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
-import { useRealtime } from "@/hooks/useRealtime";
+import { notifyLocalTabs, useRealtime } from "@/hooks/useRealtime";
 import { useMotionPreference } from "@/hooks/useMotionPreference";
 import { playChime } from "@/lib/sound";
 import { formatElapsed, formatTimeShort } from "@/lib/utils";
@@ -73,7 +73,7 @@ function ChefWorkspace({
   const [customRejectReason, setCustomRejectReason] = useState("");
 
   const fetchOrders = useCallback(async () => {
-    const res = await fetch("/api/v1/chef/orders", { cache: "no-store" });
+    const res = await fetch(`/api/v1/chef/orders?t=${Date.now()}`, { cache: "no-store" });
     if (res.ok) {
       const next = (await res.json()) as ChefPayload;
       const incomingIds = next.pending.map((o) => o.id);
@@ -107,6 +107,9 @@ function ChefWorkspace({
       playChime("new_order", muted);
       setBanner(ev.message);
       setTimeout(() => setBanner(null), 5000);
+    } else if (ev.type === "menu.updated" || ev.type === "inventory.updated") {
+      setBanner(ev.message);
+      setTimeout(() => setBanner((prev) => (prev === ev.message ? null : prev)), 4000);
     }
   });
 
@@ -137,6 +140,10 @@ function ChefWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_available: !item.is_available }),
       });
+      notifyLocalTabs({
+        type: "menu.updated",
+        message: `${item.name} availability updated by Kitchen`,
+      });
       await fetchOrders();
     } finally {
       setBusyId(null);
@@ -160,6 +167,10 @@ function ChefWorkspace({
         setBanner(json.error ?? "Could not submit low-stock flag");
       } else {
         setBanner(`Flagged low stock for ${flagTarget.name}. Manager and Owner alerted.`);
+        notifyLocalTabs({
+          type: "inventory.updated",
+          message: `Chef flagged low stock: ${flagTarget.name}`,
+        });
         setFlagTarget(null);
         setFlagNote("");
         await fetchOrders();
@@ -211,7 +222,7 @@ function ChefWorkspace({
                   : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
               }`}
             >
-              <Flame className="h-3.5 w-3.5" />
+              <Flame className="h-3.5 w-3.5" strokeWidth={1.65} />
               Live KDS Board
               <span className="rounded bg-black/20 px-1.5 py-0.5 font-mono text-[11px]">
                 {pending.length + preparing.length + ready.length}
@@ -226,7 +237,7 @@ function ChefWorkspace({
                   : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
               }`}
             >
-              <Utensils className="h-3.5 w-3.5" />
+              <Utensils className="h-3.5 w-3.5" strokeWidth={1.65} />
               86 / Item Availability
             </button>
             <button
@@ -238,14 +249,14 @@ function ChefWorkspace({
                   : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
               }`}
             >
-              <History className="h-3.5 w-3.5" />
+              <History className="h-3.5 w-3.5" strokeWidth={1.65} />
               Rejected &amp; History ({(data?.rejected.length ?? 0) + (data?.history.length ?? 0)})
             </button>
           </div>
 
           {(data?.inventory_low.length ?? 0) > 0 && (
             <div className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-300">
-              <Package className="h-3.5 w-3.5" />
+              <Package className="h-3.5 w-3.5" strokeWidth={1.65} />
               Low Stock:{" "}
               <span className="font-semibold">
                 {data?.inventory_low.map((i) => i.name).join(", ")}
@@ -260,7 +271,7 @@ function ChefWorkspace({
           <div className="flex items-center justify-between rounded-xl border border-amber-500/40 bg-amber-500/15 px-4 py-2.5 text-xs font-medium text-amber-200">
             <span>{banner}</span>
             <button type="button" onClick={() => setBanner(null)}>
-              <X className="h-4 w-4" />
+              <X className="h-4 w-4" strokeWidth={1.65} />
             </button>
           </div>
         </div>
@@ -313,7 +324,7 @@ function ChefWorkspace({
                           </span>
                         </div>
                         <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold tabular-nums text-amber-300">
-                          <Clock className="h-3.5 w-3.5" />
+                          <Clock className="h-3.5 w-3.5" strokeWidth={1.65} />
                           {formatElapsed(order.created_at, nowMs)}
                         </span>
                       </div>
@@ -321,7 +332,7 @@ function ChefWorkspace({
                       <div className="p-4">
                         {order.special_instructions && (
                           <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-400/40 bg-amber-500/15 p-2.5 text-xs font-semibold text-amber-200">
-                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" strokeWidth={1.65} />
                             <span>{order.special_instructions}</span>
                           </div>
                         )}
@@ -372,7 +383,7 @@ function ChefWorkspace({
                             }
                             className="flex items-center justify-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 py-2.5 text-xs font-bold text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
                           >
-                            <Ban className="h-3.5 w-3.5" /> Reject
+                            <Ban className="h-3.5 w-3.5" strokeWidth={1.65} /> Reject
                           </button>
                           <button
                             type="button"
@@ -382,7 +393,7 @@ function ChefWorkspace({
                             }
                             className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-500 py-2.5 text-xs font-bold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50"
                           >
-                            <Check className="h-4 w-4" /> Accept Order
+                            <Check className="h-4 w-4" strokeWidth={1.65} /> Accept Order
                           </button>
                         </div>
                       </div>
@@ -397,7 +408,7 @@ function ChefWorkspace({
             <section className="flex flex-col rounded-2xl border border-orange-500/25 bg-[#12151C]">
               <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <Flame className="h-4 w-4 text-orange-400" />
+                  <Flame className="h-4 w-4 text-orange-400" strokeWidth={1.65} />
                   <h2 className="text-sm font-bold uppercase tracking-wider text-orange-300">
                     Preparing · Item Control
                   </h2>
@@ -438,7 +449,7 @@ function ChefWorkspace({
                               urgent ? "text-rose-400" : "text-zinc-300"
                             }`}
                           >
-                            <Clock className="h-3.5 w-3.5" />
+                            <Clock className="h-3.5 w-3.5" strokeWidth={1.65} />
                             {formatElapsed(order.created_at, nowMs)}
                           </span>
                         </div>
@@ -553,7 +564,7 @@ function ChefWorkspace({
             <section className="flex flex-col rounded-2xl border border-emerald-500/25 bg-[#12151C]">
               <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" strokeWidth={1.65} />
                   <h2 className="text-sm font-bold uppercase tracking-wider text-emerald-300">
                     Ready at Pass · Waiter Pickup
                   </h2>
@@ -779,7 +790,7 @@ function ChefWorkspace({
                 className="text-zinc-400 hover:text-white"
                 aria-label="Close"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.65} />
               </button>
             </div>
 
@@ -838,7 +849,7 @@ function ChefWorkspace({
                 onClick={() => setRejectTarget(null)}
                 className="text-zinc-400 hover:text-white"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.65} />
               </button>
             </div>
 
@@ -859,7 +870,7 @@ function ChefWorkspace({
                 >
                   {r}
                   {rejectReason === r && !customRejectReason && (
-                    <Check className="h-3.5 w-3.5 text-rose-400" />
+                    <Check className="h-3.5 w-3.5 text-rose-400" strokeWidth={1.65} />
                   )}
                 </button>
               ))}

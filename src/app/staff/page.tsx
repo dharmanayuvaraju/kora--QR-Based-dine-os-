@@ -85,7 +85,7 @@ function StaffWorkspace({
   const [collecting, setCollecting] = useState(false);
 
   const loadOverview = useCallback(async () => {
-    const res = await fetch("/api/v1/staff/overview", { cache: "no-store" });
+    const res = await fetch(`/api/v1/staff/overview?t=${Date.now()}`, { cache: "no-store" });
     if (res.ok) setData(await res.json());
   }, []);
 
@@ -185,11 +185,11 @@ function StaffWorkspace({
         {alertText && (
           <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-emerald-300 bg-emerald-950 px-4 py-3 text-xs font-medium text-emerald-50 shadow-sm">
             <span className="flex items-center gap-2">
-              <BellRing className="h-4 w-4 text-emerald-400" />
+              <BellRing className="h-4 w-4 text-emerald-400" strokeWidth={1.65} />
               {alertText}
             </span>
             <button type="button" onClick={() => setAlertText(null)}>
-              <X className="h-4 w-4 opacity-70" />
+              <X className="h-4 w-4 opacity-70" strokeWidth={1.65} />
             </button>
           </div>
         )}
@@ -206,7 +206,7 @@ function StaffWorkspace({
                   : "border border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
               }`}
             >
-              <BellRing className="h-3.5 w-3.5" />
+              <BellRing className="h-3.5 w-3.5" strokeWidth={1.65} />
               Ready to Serve
               <span className="rounded-full bg-black/15 px-1.5 py-0.5 font-mono text-[11px]">
                 {readyItems.length}
@@ -221,7 +221,7 @@ function StaffWorkspace({
                   : "border border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
               }`}
             >
-              <Receipt className="h-3.5 w-3.5" />
+              <Receipt className="h-3.5 w-3.5" strokeWidth={1.65} />
               Bill Requests
               <span className="rounded-full bg-black/15 px-1.5 py-0.5 font-mono text-[11px]">
                 {billRequests.length}
@@ -236,7 +236,7 @@ function StaffWorkspace({
                   : "border border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
               }`}
             >
-              <Users className="h-3.5 w-3.5" />
+              <Users className="h-3.5 w-3.5" strokeWidth={1.65} />
               Floor Tables ({tables.filter((t) => t.active_session).length} active)
             </button>
             <button
@@ -248,7 +248,7 @@ function StaffWorkspace({
                   : "border border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
               }`}
             >
-              <History className="h-3.5 w-3.5" />
+              <History className="h-3.5 w-3.5" strokeWidth={1.65} />
               Served History
             </button>
           </div>
@@ -269,7 +269,7 @@ function StaffWorkspace({
           <div className="mt-5">
             {readyItems.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-12 text-center">
-                <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500/70" />
+                <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500/70" strokeWidth={1.65} />
                 <p className="mt-3 text-sm font-semibold text-stone-800">
                   Kitchen pass is clear. All ready dishes have been served.
                 </p>
@@ -313,7 +313,7 @@ function StaffWorkspace({
                       )}
                       {entry.item.ready_at && (
                         <p className="mt-2.5 flex items-center gap-1 text-xs text-stone-500">
-                          <Clock className="h-3.5 w-3.5" />
+                          <Clock className="h-3.5 w-3.5" strokeWidth={1.65} />
                           Waiting at pass: {formatElapsed(entry.item.ready_at)}
                         </p>
                       )}
@@ -325,7 +325,7 @@ function StaffWorkspace({
                       onClick={() => markServed(entry.item.id)}
                       className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:opacity-50"
                     >
-                      <Check className="h-4 w-4" />
+                      <Check className="h-4 w-4" strokeWidth={1.65} />
                       {busyId === entry.item.id ? "Updating..." : "Confirm Served at Table"}
                     </button>
                   </article>
@@ -390,7 +390,7 @@ function StaffWorkspace({
                     onClick={() => openCollectModal(bill)}
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-stone-900 py-3 text-xs font-semibold text-white hover:bg-[#C2410C]"
                   >
-                    <Banknote className="h-4 w-4" />
+                    <Banknote className="h-4 w-4" strokeWidth={1.65} />
                     Collect Counter Payment &amp; Settle
                   </button>
                 </div>
@@ -546,7 +546,7 @@ function StaffWorkspace({
                 onClick={() => setCollectTarget(null)}
                 className="rounded-full bg-stone-100 p-1.5 text-stone-500"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.65} />
               </button>
             </div>
 
@@ -592,7 +592,7 @@ function StaffWorkspace({
                           : "border-stone-200 text-stone-700"
                       }`}
                     >
-                      <Icon className="h-4 w-4" />
+                      <Icon className="h-4 w-4" strokeWidth={1.65} />
                       {ch.label}
                     </button>
                   );

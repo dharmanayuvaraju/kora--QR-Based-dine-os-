@@ -36,7 +36,7 @@ const ROUTES: Array<{
   label: string;
   shortLabel: string;
   role?: UserRole;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
 }> = [
   { href: "/chef", label: "Kitchen KDS", shortLabel: "KDS", role: "chef", icon: ChefHat },
   { href: "/staff", label: "Floor Staff", shortLabel: "Staff", role: "staff", icon: UserCheck },
@@ -121,7 +121,7 @@ export function ConsoleHeader({
                         : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
                     )}
                   >
-                    <Icon className="h-3.5 w-3.5" />
+                    <Icon className="h-3.5 w-3.5" strokeWidth={1.65} />
                     {item.label}
                   </Link>
                 );
@@ -143,9 +143,9 @@ export function ConsoleHeader({
               )}
             >
               {connected ? (
-                <Wifi className="h-3 w-3" />
+                <Wifi className="h-3 w-3" strokeWidth={1.65} />
               ) : (
-                <WifiOff className="h-3 w-3" />
+                <WifiOff className="h-3 w-3" strokeWidth={1.65} />
               )}
               <span className="hidden sm:inline">
                 {connected ? "Live Sync" : "Reconnecting"}
@@ -165,9 +165,9 @@ export function ConsoleHeader({
                 title={muted ? "Unmute Audio Alerts" : "Mute Audio Alerts"}
               >
                 {muted ? (
-                  <VolumeX className="h-3.5 w-3.5 text-rose-500" />
+                  <VolumeX className="h-3.5 w-3.5 text-rose-500" strokeWidth={1.65} />
                 ) : (
-                  <Volume2 className="h-3.5 w-3.5 text-emerald-500" />
+                  <Volume2 className="h-3.5 w-3.5 text-emerald-500" strokeWidth={1.65} />
                 )}
                 <span className="hidden md:inline">{muted ? "Muted" : "Audio On"}</span>
               </button>
@@ -205,7 +205,7 @@ export function ConsoleHeader({
               )}
               title="Sign out"
             >
-              <LogOut className="h-3.5 w-3.5" />
+              <LogOut className="h-3.5 w-3.5" strokeWidth={1.65} />
             </button>
           </div>
         </div>
@@ -240,7 +240,7 @@ export function ConsoleHeader({
                 }}
                 className="inline-flex items-center gap-1 rounded-lg bg-rose-600/15 px-2.5 py-1 text-[11px] font-semibold text-rose-500"
               >
-                <LogOut className="h-3 w-3" /> Sign out
+                <LogOut className="h-3 w-3" strokeWidth={1.65} /> Sign out
               </button>
             </div>
 
@@ -266,7 +266,7 @@ export function ConsoleHeader({
                     )}
                   >
                     <span className="inline-flex items-center gap-2">
-                      <Icon className="h-4 w-4 shrink-0" />
+                      <Icon className="h-4 w-4 shrink-0" strokeWidth={1.65} />
                       {item.label}
                     </span>
                     {!isOwnRole && (
@@ -309,7 +309,7 @@ export function ConsoleHeader({
                     : "text-stone-500 hover:text-stone-900"
                 )}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-4 w-4" strokeWidth={1.65} />
                 <span>{item.shortLabel}</span>
               </Link>
             );

@@ -20,6 +20,13 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Consistent bespoke icon stroke treatment across all Lucide SVGs */
+svg.lucide {
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Subtle warm artisanal paper grain texture (zero heavy filters) */
 .kora-grain {
   background-image: radial-gradient(rgba(28, 25, 23, 0.045) 0.75px, transparent 0.75px);

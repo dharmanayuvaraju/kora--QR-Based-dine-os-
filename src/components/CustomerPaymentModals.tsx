@@ -136,7 +136,7 @@ export function DemoPaymentModal({
           onClick={onConfirm}
           className="mt-5 flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-[#C2410C] py-3 text-sm font-semibold text-white transition hover:bg-[#9A3412] disabled:opacity-60"
         >
-          <Check className="h-4 w-4" strokeWidth={2} />
+          <Check className="h-4 w-4" strokeWidth={1.7} />
           {processingPay
             ? "Recording Demo Payment..."
             : `Confirm Demo Payment · ${formatCurrency(Number(payAmountInput) || 0)}`}
