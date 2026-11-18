@@ -13,7 +13,7 @@ const Schema = z.object({
   prep_minutes: z.number().int().min(1).max(120).default(15),
   image_url: z
     .string()
-    .default("https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=600&q=80"),
+    .default("/dishes/black-dal.jpg"),
   is_bestseller: z.boolean().default(false),
   is_available: z.boolean().default(true),
   variants: z

@@ -123,6 +123,7 @@ export function ManagementSuite({
 
   const [newEmpName, setNewEmpName] = useState("");
   const [newEmpEmail, setNewEmpEmail] = useState("");
+  const [newEmpPassword, setNewEmpPassword] = useState("");
   const [newEmpRole, setNewEmpRole] = useState<UserRole>("staff");
 
   const [newExpTitle, setNewExpTitle] = useState("");
@@ -219,7 +220,7 @@ export function ManagementSuite({
   );
 
   return (
-    <div className="min-h-screen bg-[#F6F7F8] text-stone-900">
+    <div className="min-h-screen bg-[#F6F7F8] pb-20 text-stone-900 lg:pb-0">
       <ConsoleHeader
         user={user}
         connected={connected}
@@ -337,7 +338,7 @@ export function ManagementSuite({
                   <div className="mt-4 space-y-4">
                     {[
                       {
-                        label: "Online (Razorpay UPI / Cards)",
+                        label: "Online (Demo UPI / Cards)",
                         val: data.kpis.online_revenue,
                         color: "bg-sky-600",
                       },
@@ -613,7 +614,7 @@ export function ManagementSuite({
           {tab === "orders" && data && (
             <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[680px] text-left text-xs">
                   <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
                     <tr>
                       <th className="px-4 py-3">Order</th>
@@ -769,93 +770,214 @@ export function ManagementSuite({
                 </form>
               )}
 
-              <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
-                    <tr>
-                      <th className="px-4 py-3">Dish</th>
-                      <th className="px-4 py-3">Category</th>
-                      <th className="px-4 py-3">Price</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3 text-right">Controls</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {data.menu_items.map((item) => {
-                      const catName =
-                        data.categories.find((c) => c.id === item.category_id)?.name ?? "—";
-                      return (
-                        <tr key={item.id}>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <DietaryMark dietary={item.dietary} />
-                              <div>
-                                <p className="font-semibold text-stone-900">{item.name}</p>
-                                <p className="line-clamp-1 text-[11px] text-stone-400">
-                                  {item.description}
-                                </p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-stone-600">{catName}</td>
-                          <td className="px-4 py-3 font-mono font-semibold">
-                            {formatCurrency(item.price)}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                item.is_available
-                                  ? "bg-emerald-50 text-emerald-800"
-                                  : "bg-rose-50 text-rose-800"
-                              }`}
+              {/* Mobile stacked cards (<640px) so every status & control is fully reachable */}
+              <div className="space-y-3 sm:hidden">
+                {data.menu_items.map((item) => {
+                  const catName =
+                    data.categories.find((c) => c.id === item.category_id)?.name ?? "—";
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-2xl border border-stone-200 bg-white p-4 shadow-xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 items-start gap-2">
+                          <span className="mt-0.5 shrink-0">
+                            <DietaryMark dietary={item.dietary} />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-stone-900">
+                              {item.name}
+                            </p>
+                            <p className="text-[11px] text-stone-500">
+                              {catName} ·{" "}
+                              <span className="font-mono font-semibold text-stone-900">
+                                {formatCurrency(item.price)}
+                              </span>
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            item.is_available
+                              ? "bg-emerald-50 text-emerald-800"
+                              : "bg-rose-50 text-rose-800"
+                          }`}
+                        >
+                          {item.is_available ? "Available" : "Sold Out (86)"}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            apiCall(
+                              `/api/v1/menu/items/${item.id}/availability`,
+                              "PATCH",
+                              { is_available: !item.is_available },
+                              `${item.name} marked ${!item.is_available ? "Available" : "Sold Out"}`
+                            )
+                          }
+                          className="flex-1 rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                        >
+                          {item.is_available ? "Mark 86" : "Restore"}
+                        </button>
+                        {isOwner && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextPrice = window.prompt(
+                                  `Update price for ${item.name} (₹):`,
+                                  String(item.price)
+                                );
+                                if (!nextPrice || !Number(nextPrice)) return;
+                                apiCall(
+                                  `/api/v1/menu/items/${item.id}`,
+                                  "PATCH",
+                                  { price: Number(nextPrice) },
+                                  `Updated price of ${item.name} to ₹${nextPrice}`
+                                );
+                              }}
+                              className="rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
                             >
-                              {item.is_available ? "Available" : "Sold Out (86)"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="inline-flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  apiCall(
-                                    `/api/v1/menu/items/${item.id}/availability`,
-                                    "PATCH",
-                                    { is_available: !item.is_available },
-                                    `${item.name} marked ${!item.is_available ? "Available" : "Sold Out"}`
-                                  )
-                                }
-                                className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                              Edit ₹
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!window.confirm(`Archive "${item.name}" from the active menu?`))
+                                  return;
+                                apiCall(
+                                  `/api/v1/menu/items/${item.id}`,
+                                  "DELETE",
+                                  undefined,
+                                  `Archived ${item.name}`
+                                );
+                              }}
+                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                            >
+                              Archive
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop / Tablet horizontally-scrollable table */}
+              <div className="hidden overflow-hidden rounded-2xl border border-stone-200 bg-white sm:block">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[660px] text-left text-xs">
+                    <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
+                      <tr>
+                        <th className="px-4 py-3">Dish</th>
+                        <th className="px-4 py-3">Category</th>
+                        <th className="px-4 py-3">Price</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3 text-right">Controls</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {data.menu_items.map((item) => {
+                        const catName =
+                          data.categories.find((c) => c.id === item.category_id)?.name ?? "—";
+                        return (
+                          <tr key={item.id}>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <DietaryMark dietary={item.dietary} />
+                                <div>
+                                  <p className="font-semibold text-stone-900">{item.name}</p>
+                                  <p className="line-clamp-1 text-[11px] text-stone-400">
+                                    {item.description}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-stone-600">
+                              {catName}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 font-mono font-semibold">
+                              {formatCurrency(item.price)}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3">
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                  item.is_available
+                                    ? "bg-emerald-50 text-emerald-800"
+                                    : "bg-rose-50 text-rose-800"
+                                }`}
                               >
-                                {item.is_available ? "Mark 86" : "Restore"}
-                              </button>
-                              {isOwner && (
+                                {item.is_available ? "Available" : "Sold Out (86)"}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right">
+                              <div className="inline-flex items-center gap-2">
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    const nextPrice = window.prompt(
-                                      `Update price for ${item.name} (₹):`,
-                                      String(item.price)
-                                    );
-                                    if (!nextPrice || !Number(nextPrice)) return;
+                                  onClick={() =>
                                     apiCall(
-                                      `/api/v1/menu/items/${item.id}`,
+                                      `/api/v1/menu/items/${item.id}/availability`,
                                       "PATCH",
-                                      { price: Number(nextPrice) },
-                                      `Updated price of ${item.name} to ₹${nextPrice}`
-                                    );
-                                  }}
+                                      { is_available: !item.is_available },
+                                      `${item.name} marked ${!item.is_available ? "Available" : "Sold Out"}`
+                                    )
+                                  }
                                   className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
                                 >
-                                  Edit ₹
+                                  {item.is_available ? "Mark 86" : "Restore"}
                                 </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                                {isOwner && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const nextPrice = window.prompt(
+                                          `Update price for ${item.name} (₹):`,
+                                          String(item.price)
+                                        );
+                                        if (!nextPrice || !Number(nextPrice)) return;
+                                        apiCall(
+                                          `/api/v1/menu/items/${item.id}`,
+                                          "PATCH",
+                                          { price: Number(nextPrice) },
+                                          `Updated price of ${item.name} to ₹${nextPrice}`
+                                        );
+                                      }}
+                                      className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                                    >
+                                      Edit ₹
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!window.confirm(`Archive "${item.name}" from the active menu?`))
+                                          return;
+                                        apiCall(
+                                          `/api/v1/menu/items/${item.id}`,
+                                          "DELETE",
+                                          undefined,
+                                          `Archived ${item.name}`
+                                        );
+                                      }}
+                                      className="rounded-lg border border-rose-200 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+                                    >
+                                      Archive
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -870,7 +992,7 @@ export function ManagementSuite({
                   </h2>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full min-w-[680px] text-left text-xs">
                     <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
                       <tr>
                         <th className="px-4 py-3">Receipt</th>
@@ -963,49 +1085,51 @@ export function ManagementSuite({
           {tab === "inventory" && data && (
             <div className="grid gap-5 lg:grid-cols-12">
               <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white lg:col-span-8">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
-                    <tr>
-                      <th className="px-4 py-3">Ingredient</th>
-                      <th className="px-4 py-3">Stock</th>
-                      <th className="px-4 py-3">Reorder Level</th>
-                      <th className="px-4 py-3 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {data.inventory_items.map((inv) => {
-                      const low = inv.current_stock <= inv.reorder_level;
-                      return (
-                        <tr key={inv.id}>
-                          <td className="px-4 py-3 font-semibold text-stone-900">
-                            {inv.name}
-                          </td>
-                          <td className="px-4 py-3 font-mono font-bold">
-                            <span className={low ? "text-rose-600" : "text-stone-900"}>
-                              {inv.current_stock} {inv.unit}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-stone-500">
-                            {inv.reorder_level} {inv.unit}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setStockModal(inv);
-                                setStockQty("5");
-                                setStockNote("");
-                              }}
-                              className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
-                            >
-                              Adjust Stock
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[520px] text-left text-xs">
+                    <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
+                      <tr>
+                        <th className="px-4 py-3">Ingredient</th>
+                        <th className="px-4 py-3">Stock</th>
+                        <th className="px-4 py-3">Reorder Level</th>
+                        <th className="px-4 py-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {data.inventory_items.map((inv) => {
+                        const low = inv.current_stock <= inv.reorder_level;
+                        return (
+                          <tr key={inv.id}>
+                            <td className="px-4 py-3 font-semibold text-stone-900">
+                              {inv.name}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 font-mono font-bold">
+                              <span className={low ? "text-rose-600" : "text-stone-900"}>
+                                {inv.current_stock} {inv.unit}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 font-mono text-stone-500">
+                              {inv.reorder_level} {inv.unit}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStockModal(inv);
+                                  setStockQty("5");
+                                  setStockNote("");
+                                }}
+                                className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                              >
+                                Adjust Stock
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <div className="rounded-2xl border border-stone-200 bg-white p-4 lg:col-span-4">
@@ -1102,33 +1226,57 @@ export function ManagementSuite({
                 </button>
               </form>
 
-              <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
-                    <tr>
-                      <th className="px-4 py-3">Expense</th>
-                      <th className="px-4 py-3">Category</th>
-                      <th className="px-4 py-3">Recorded By</th>
-                      <th className="px-4 py-3 text-right">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {data.expenses.map((exp) => (
-                      <tr key={exp.id}>
-                        <td className="px-4 py-3 font-semibold text-stone-900">
-                          {exp.title}
-                        </td>
-                        <td className="px-4 py-3 capitalize text-stone-600">
-                          {exp.category}
-                        </td>
-                        <td className="px-4 py-3 text-stone-500">{exp.recorded_by}</td>
-                        <td className="px-4 py-3 text-right font-mono font-bold text-rose-700">
-                          {formatCurrency(exp.amount)}
-                        </td>
+              {/* Mobile stacked cards (<640px) */}
+              <div className="space-y-3 sm:hidden">
+                {data.expenses.map((exp) => (
+                  <div
+                    key={exp.id}
+                    className="rounded-2xl border border-stone-200 bg-white p-4 shadow-xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-semibold text-stone-900">{exp.title}</p>
+                      <span className="shrink-0 font-mono text-sm font-bold text-rose-700">
+                        {formatCurrency(exp.amount)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs capitalize text-stone-500">
+                      {exp.category} · Recorded by {exp.recorded_by}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden overflow-hidden rounded-2xl border border-stone-200 bg-white sm:block">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[540px] text-left text-xs">
+                    <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
+                      <tr>
+                        <th className="px-4 py-3">Expense</th>
+                        <th className="px-4 py-3">Category</th>
+                        <th className="px-4 py-3">Recorded By</th>
+                        <th className="px-4 py-3 text-right">Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {data.expenses.map((exp) => (
+                        <tr key={exp.id}>
+                          <td className="px-4 py-3 font-semibold text-stone-900">
+                            {exp.title}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 capitalize text-stone-600">
+                            {exp.category}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-stone-500">
+                            {exp.recorded_by}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-mono font-bold text-rose-700">
+                            {formatCurrency(exp.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -1139,13 +1287,14 @@ export function ManagementSuite({
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  if (!newEmpName.trim() || !newEmpEmail.trim()) return;
+                  if (!newEmpName.trim() || !newEmpEmail.trim() || !newEmpPassword) return;
                   const ok = await apiCall(
                     "/api/v1/users",
                     "POST",
                     {
                       full_name: newEmpName.trim(),
                       email: newEmpEmail.trim(),
+                      password: newEmpPassword,
                       role: newEmpRole,
                     },
                     `Created ${newEmpRole.toUpperCase()} account for ${newEmpName.trim()}`
@@ -1153,6 +1302,7 @@ export function ManagementSuite({
                   if (ok) {
                     setNewEmpName("");
                     setNewEmpEmail("");
+                    setNewEmpPassword("");
                   }
                 }}
                 className="flex flex-wrap items-end gap-3 rounded-2xl border border-stone-200 bg-white p-4"
@@ -1163,7 +1313,7 @@ export function ManagementSuite({
                   value={newEmpName}
                   onChange={(e) => setNewEmpName(e.target.value)}
                   placeholder="Full Name"
-                  className="min-w-[160px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
+                  className="min-w-[140px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
                 />
                 <input
                   type="email"
@@ -1171,7 +1321,16 @@ export function ManagementSuite({
                   value={newEmpEmail}
                   onChange={(e) => setNewEmpEmail(e.target.value)}
                   placeholder="employee@kora.in"
-                  className="min-w-[180px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
+                  className="min-w-[160px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
+                />
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={newEmpPassword}
+                  onChange={(e) => setNewEmpPassword(e.target.value)}
+                  placeholder="Initial password (8+ chars)"
+                  className="min-w-[160px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
                 />
                 <select
                   value={newEmpRole}
@@ -1190,65 +1349,125 @@ export function ManagementSuite({
                 </button>
               </form>
 
-              <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
-                    <tr>
-                      <th className="px-4 py-3">Employee</th>
-                      <th className="px-4 py-3">Email</th>
-                      <th className="px-4 py-3">Role</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3 text-right">Access</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {data.users.map((emp) => {
-                      const canEdit =
-                        emp.id !== user.id &&
-                        (isOwner || emp.role === "staff" || emp.role === "chef");
-                      return (
-                        <tr key={emp.id}>
-                          <td className="px-4 py-3 font-semibold text-stone-900">
+              {/* Mobile stacked cards (<640px) */}
+              <div className="space-y-3 sm:hidden">
+                {data.users.map((emp) => {
+                  const canEdit =
+                    emp.id !== user.id &&
+                    (isOwner || emp.role === "staff" || emp.role === "chef");
+                  return (
+                    <div
+                      key={emp.id}
+                      className="rounded-2xl border border-stone-200 bg-white p-4 shadow-xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-stone-900">
                             {emp.full_name}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-stone-600">{emp.email}</td>
-                          <td className="px-4 py-3 uppercase font-semibold text-[#C2410C]">
-                            {emp.role}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                emp.is_active
-                                  ? "bg-emerald-50 text-emerald-800"
-                                  : "bg-stone-200 text-stone-600"
-                              }`}
-                            >
-                              {emp.is_active ? "Active" : "Disabled"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            {canEdit && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  apiCall(
-                                    `/api/v1/users/${emp.id}`,
-                                    "PATCH",
-                                    { is_active: !emp.is_active },
-                                    `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
-                                  )
-                                }
-                                className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                          </p>
+                          <p className="truncate font-mono text-xs text-stone-500">
+                            {emp.email}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            emp.is_active
+                              ? "bg-emerald-50 text-emerald-800"
+                              : "bg-stone-200 text-stone-600"
+                          }`}
+                        >
+                          {emp.is_active ? "Active" : "Disabled"}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between border-t border-stone-100 pt-2.5">
+                        <span className="text-xs font-semibold uppercase text-[#C2410C]">
+                          {emp.role}
+                        </span>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              apiCall(
+                                `/api/v1/users/${emp.id}`,
+                                "PATCH",
+                                { is_active: !emp.is_active },
+                                `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
+                              )
+                            }
+                            className="rounded-lg border border-stone-200 px-3 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                          >
+                            {emp.is_active ? "Disable" : "Re-enable"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden overflow-hidden rounded-2xl border border-stone-200 bg-white sm:block">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[600px] text-left text-xs">
+                    <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
+                      <tr>
+                        <th className="px-4 py-3">Employee</th>
+                        <th className="px-4 py-3">Email</th>
+                        <th className="px-4 py-3">Role</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3 text-right">Access</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {data.users.map((emp) => {
+                        const canEdit =
+                          emp.id !== user.id &&
+                          (isOwner || emp.role === "staff" || emp.role === "chef");
+                        return (
+                          <tr key={emp.id}>
+                            <td className="whitespace-nowrap px-4 py-3 font-semibold text-stone-900">
+                              {emp.full_name}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 font-mono text-stone-600">
+                              {emp.email}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 font-semibold uppercase text-[#C2410C]">
+                              {emp.role}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3">
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                  emp.is_active
+                                    ? "bg-emerald-50 text-emerald-800"
+                                    : "bg-stone-200 text-stone-600"
+                                }`}
                               >
-                                {emp.is_active ? "Disable" : "Re-enable"}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                                {emp.is_active ? "Active" : "Disabled"}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right">
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    apiCall(
+                                      `/api/v1/users/${emp.id}`,
+                                      "PATCH",
+                                      { is_active: !emp.is_active },
+                                      `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
+                                    )
+                                  }
+                                  className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                                >
+                                  {emp.is_active ? "Disable" : "Re-enable"}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}

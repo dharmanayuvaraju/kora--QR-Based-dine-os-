@@ -6,6 +6,7 @@ import {
   ArrowRight,
   ChefHat,
   ClipboardList,
+  Lock,
   QrCode,
   RotateCcw,
   ShieldCheck,
@@ -26,6 +27,8 @@ interface HubData {
     tax_rate_percent: number;
   };
   mode: string;
+  authenticated: boolean;
+  current_role: string | null;
   stats: {
     active_sessions: number;
     pending_kitchen: number;
@@ -92,7 +95,7 @@ export default function PlatformHubPage() {
                 {hub?.restaurant.name ?? "KORA Kitchen & Grill"}
               </p>
               <p className="mt-0.5 text-[11px] uppercase tracking-[0.14em] text-stone-500">
-                Single-Restaurant QR Ordering & Hospitality OS
+                Single-Restaurant QR Ordering &amp; Hospitality OS
               </p>
             </div>
           </div>
@@ -106,15 +109,17 @@ export default function PlatformHubPage() {
                   : "Real-time Engine Active"
                 : "Connecting..."}
             </span>
-            <button
-              type="button"
-              onClick={handleReset}
-              disabled={resetting}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:bg-stone-100 disabled:opacity-50"
-            >
-              <RotateCcw className={`h-3.5 w-3.5 ${resetting ? "animate-spin" : ""}`} />
-              Reset Service Data
-            </button>
+            {hub?.current_role === "owner" && (
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={resetting}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:bg-stone-100 disabled:opacity-50"
+              >
+                <RotateCcw className={`h-3.5 w-3.5 ${resetting ? "animate-spin" : ""}`} />
+                Reset Service Data
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -131,9 +136,9 @@ export default function PlatformHubPage() {
               From table QR scan to kitchen pass, service &amp; settlement.
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-relaxed text-stone-600 sm:text-base">
-              Open any role workspace in a separate tab to watch orders, chef approvals,
-              item-level readiness, waiter delivery, and combined table billing sync live
-              without refreshing.
+              Guests scan the unique QR standee at their table to order directly.
+              Authenticated staff access their dedicated role console for kitchen approval,
+              floor delivery, operations, and analytics.
             </p>
           </div>
 
@@ -195,7 +200,7 @@ export default function PlatformHubPage() {
               Application Surfaces
             </h2>
             <span className="text-xs text-stone-500">
-              Single Next.js app · RBAC-enforced employee routes
+              Single Next.js app · Role-gated employee consoles
             </span>
           </div>
 
@@ -217,12 +222,12 @@ export default function PlatformHubPage() {
                   Guest QR Ordering
                 </h3>
                 <p className="mt-1.5 text-xs leading-relaxed text-stone-600">
-                  Zero-login table dining menu, dish customization, live item tracker,
-                  Razorpay UPI/Card &amp; counter billing.
+                  Zero-login dining menu opened by scanning your physical tabletop QR
+                  standee, with live tracking &amp; combined billing.
                 </p>
               </div>
               <div className="mt-5 flex items-center gap-1 text-xs font-semibold text-[#C2410C]">
-                Open Dining Menu
+                Scan Table QR
                 <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
               </div>
             </Link>
@@ -247,7 +252,7 @@ export default function PlatformHubPage() {
                 </p>
               </div>
               <div className="mt-5 flex items-center gap-1 text-xs font-semibold text-amber-400">
-                Launch Kitchen Display
+                Chef Sign In
                 <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
               </div>
             </Link>
@@ -274,7 +279,7 @@ export default function PlatformHubPage() {
                 </p>
               </div>
               <div className="mt-5 flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                Open Service Console
+                Staff Sign In
                 <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
               </div>
             </Link>
@@ -301,7 +306,7 @@ export default function PlatformHubPage() {
                 </p>
               </div>
               <div className="mt-5 flex items-center gap-1 text-xs font-semibold text-sky-700">
-                Open Floor Ops
+                Manager Sign In
                 <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
               </div>
             </Link>
@@ -328,62 +333,89 @@ export default function PlatformHubPage() {
                 </p>
               </div>
               <div className="mt-5 flex items-center gap-1 text-xs font-semibold text-stone-900">
-                Open Executive Suite
+                Owner Sign In
                 <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
               </div>
             </Link>
           </div>
         </section>
 
-        {/* Live Permanent Table QR Directory */}
+        {/* Staff-Only Table QR Directory (Never Exposed Publicly) */}
         <section className="mt-12">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="font-serif text-xl font-semibold text-stone-900">
-                Live Table QR Codes
+                Table QR Codes
               </h2>
               <p className="mt-0.5 text-xs text-stone-600">
-                Every physical table has a permanent unguessable UUID token. Scan with a
-                phone or open directly — Table 05 has an active multi-order session, Table
-                02 has a partial payment pending.
+                Each physical table uses a private, unguessable UUID token so guests can
+                only order from their seated table.
               </p>
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {(hub?.tables ?? []).map((table) => (
-              <div key={table.id} className="relative">
-                <div className="mb-1.5 flex items-center justify-between px-1 text-[11px]">
-                  <span className="font-medium text-stone-500">
-                    Seats {table.capacity} · {table.order_count} order
-                    {table.order_count === 1 ? "" : "s"}
-                  </span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${
-                      table.session_status === "payment_pending"
-                        ? "bg-orange-100 text-orange-800"
+          {hub?.authenticated && hub.tables.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {hub.tables.map((table) => (
+                <div key={table.id} className="relative">
+                  <div className="mb-1.5 flex items-center justify-between px-1 text-[11px]">
+                    <span className="font-medium text-stone-500">
+                      Seats {table.capacity} · {table.order_count} order
+                      {table.order_count === 1 ? "" : "s"}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${
+                        table.session_status === "payment_pending"
+                          ? "bg-orange-100 text-orange-800"
+                          : table.session_status === "active"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : "bg-stone-200/80 text-stone-600"
+                      }`}
+                    >
+                      {table.session_status === "payment_pending"
+                        ? "Bill Requested"
                         : table.session_status === "active"
-                        ? "bg-emerald-100 text-emerald-800"
-                        : "bg-stone-200/80 text-stone-600"
-                    }`}
-                  >
-                    {table.session_status === "payment_pending"
-                      ? "Bill Requested"
-                      : table.session_status === "active"
-                      ? "Dining Active"
-                      : "Available"}
-                  </span>
+                        ? "Dining Active"
+                        : "Available"}
+                    </span>
+                  </div>
+                  <QrCodeCard
+                    tableNumber={table.table_number}
+                    section={table.section}
+                    qrToken={table.qr_token}
+                    restaurantName={hub.restaurant.name}
+                    compact
+                  />
                 </div>
-                <QrCodeCard
-                  tableNumber={table.table_number}
-                  section={table.section}
-                  qrToken={table.qr_token}
-                  restaurantName={hub?.restaurant.name}
-                  compact
-                />
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-start justify-between gap-4 rounded-2xl border border-stone-200 bg-white p-6 sm:flex-row sm:items-center">
+              <div className="flex items-start gap-3.5">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-stone-100 text-stone-700">
+                  <Lock className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-semibold text-stone-900">
+                    Table QR links are restricted to signed-in staff
+                  </h3>
+                  <p className="mt-1 max-w-xl text-xs leading-relaxed text-stone-600">
+                    To protect table-session integrity, secret table token URLs are hidden
+                    from public visitors. Guests scan the physical QR standee at their
+                    table; signed-in staff can view and print table QR standees here or in
+                    the Owner/Manager QR Studio.
+                  </p>
+                </div>
               </div>
-            ))}
-          </div>
+              <Link
+                href="/owner"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#C2410C]"
+              >
+                Staff Sign In
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          )}
         </section>
       </main>
     </div>

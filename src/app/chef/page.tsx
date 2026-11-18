@@ -131,7 +131,7 @@ function ChefWorkspace({
   const ready = data?.ready ?? [];
 
   return (
-    <div className="min-h-screen bg-[#0C0E12] text-zinc-100">
+    <div className="min-h-screen bg-[#0C0E12] pb-20 text-zinc-100 lg:pb-0">
       <ConsoleHeader
         user={user}
         connected={connected}
@@ -741,7 +741,7 @@ function ChefWorkspace({
 
 export default function ChefPage() {
   return (
-    <RoleAuthGate requiredRoles={["chef", "owner"]} preferredRole="chef" theme="dark">
+    <RoleAuthGate requiredRoles={["chef"]} preferredRole="chef" theme="dark">
       {({ user, logout }) => <ChefWorkspace user={user} logout={logout} />}
     </RoleAuthGate>
   );

@@ -171,7 +171,7 @@ function StaffWorkspace({
   );
 
   return (
-    <div className="min-h-screen bg-[#F6F7F8] text-stone-900">
+    <div className="min-h-screen bg-[#F6F7F8] pb-20 text-stone-900 lg:pb-0">
       <ConsoleHeader
         user={user}
         connected={connected}
@@ -493,7 +493,8 @@ function StaffWorkspace({
         {/* ==================== SERVICE HISTORY ==================== */}
         {tab === "history" && (
           <div className="mt-5 overflow-hidden rounded-2xl border border-stone-200 bg-white">
-            <table className="w-full text-left text-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] text-left text-xs">
               <thead className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
                 <tr>
                   <th className="px-4 py-3">Table</th>
@@ -520,7 +521,8 @@ function StaffWorkspace({
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
           </div>
         )}
       </main>
@@ -615,10 +617,7 @@ function StaffWorkspace({
 
 export default function StaffPage() {
   return (
-    <RoleAuthGate
-      requiredRoles={["staff", "manager", "owner"]}
-      preferredRole="staff"
-    >
+    <RoleAuthGate requiredRoles={["staff"]} preferredRole="staff">
       {({ user, logout }) => <StaffWorkspace user={user} logout={logout} />}
     </RoleAuthGate>
   );

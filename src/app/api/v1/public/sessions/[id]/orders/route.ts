@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createCustomerOrder, getSessionBillSummary, ensureDbReady, flushDb } from "@/lib/db/store";
 
+export const dynamic = "force-dynamic";
+
 const CreateOrderSchema = z.object({
   items: z
     .array(

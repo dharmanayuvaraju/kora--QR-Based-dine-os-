@@ -78,12 +78,11 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   const [placingOrder, setPlacingOrder] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" | "err" } | null>(null);
 
-  // Payment Modal State
+  // Payment Modal State (Demo simulated checkout)
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [payChannel, setPayChannel] = useState<"upi" | "card">("upi");
   const [payAmountInput, setPayAmountInput] = useState("");
   const [upiId, setUpiId] = useState("guest@okaxis");
-  const [simulateFail, setSimulateFail] = useState(false);
   const [processingPay, setProcessingPay] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
 
@@ -92,36 +91,73 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
     setTimeout(() => setToast((prev) => (prev?.text === text ? null : prev)), 4500);
   }, []);
 
-  const loadTableAndMenu = useCallback(async () => {
+  const refreshMenuOnly = useCallback(async () => {
     try {
-      const [tableRes, menuRes] = await Promise.all([
-        fetch(`/api/v1/public/tables/${qrToken}`, { cache: "no-store" }),
-        fetch("/api/v1/public/menu", { cache: "no-store" }),
-      ]);
-      const tableData = await tableRes.json();
-      if (!tableRes.ok) {
-        setError(tableData.error ?? "Invalid QR code");
-        setLoading(false);
-        return;
+      const menuRes = await fetch(`/api/v1/public/menu?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (menuRes.ok) {
+        const menuData = await menuRes.json();
+        setCategories(menuData.categories ?? []);
+        setItems(menuData.items ?? []);
+        if (menuData.settings) setSettings(menuData.settings);
       }
-      const menuData = await menuRes.json();
-      setTable(tableData.table);
-      setSession(tableData.session);
-      setBill(tableData.bill);
-      setSettings(tableData.settings);
-      setCategories(menuData.categories ?? []);
-      setItems(menuData.items ?? []);
-      setError(null);
     } catch {
-      setError("Could not connect to restaurant ordering service.");
-    } finally {
-      setLoading(false);
+      // ignore transient error
     }
-  }, [qrToken]);
+  }, []);
+
+  const loadTableAndMenu = useCallback(
+    async (forceNew = false) => {
+      try {
+        const storageKey = `kora_last_session_${qrToken}`;
+        let savedSessionId: string | null = null;
+        if (typeof window !== "undefined") {
+          if (forceNew) {
+            window.sessionStorage.removeItem(storageKey);
+          } else {
+            savedSessionId = window.sessionStorage.getItem(storageKey);
+          }
+        }
+        const query = forceNew
+          ? "?new=1"
+          : savedSessionId
+          ? `?session_id=${encodeURIComponent(savedSessionId)}`
+          : "";
+
+        const [tableRes, menuRes] = await Promise.all([
+          fetch(`/api/v1/public/tables/${qrToken}${query}`, { cache: "no-store" }),
+          fetch(`/api/v1/public/menu?t=${Date.now()}`, { cache: "no-store" }),
+        ]);
+        const tableData = await tableRes.json();
+        if (!tableRes.ok) {
+          setError(tableData.error ?? "Invalid QR code");
+          setLoading(false);
+          return;
+        }
+        const menuData = await menuRes.json();
+        setTable(tableData.table);
+        setSession(tableData.session);
+        setBill(tableData.bill);
+        setSettings(tableData.settings);
+        setCategories(menuData.categories ?? []);
+        setItems(menuData.items ?? []);
+        if (typeof window !== "undefined" && tableData.session?.id) {
+          window.sessionStorage.setItem(storageKey, tableData.session.id);
+        }
+        setError(null);
+      } catch {
+        setError("Could not connect to restaurant ordering service.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [qrToken]
+  );
 
   const refreshSessionBill = useCallback(async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/v1/public/sessions/${sessionId}/orders`, {
+      const res = await fetch(`/api/v1/public/sessions/${sessionId}/orders?t=${Date.now()}`, {
         cache: "no-store",
       });
       if (res.ok) {
@@ -137,12 +173,12 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   }, []);
 
   useEffect(() => {
-    loadTableAndMenu();
+    loadTableAndMenu(false);
   }, [loadTableAndMenu]);
 
   const { connected } = useRealtime((event) => {
     if (event.type === "menu.updated") {
-      loadTableAndMenu();
+      refreshMenuOnly();
       return;
     }
     if (session && event.session_id === session.id) {
@@ -160,7 +196,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         playChime("payment_success");
         showToast("Payment confirmed! Thank you for dining with us.", "ok");
       } else if (event.type === "session.closed") {
-        showToast("Table session closed. Receipt is ready below.", "ok");
+        showToast("Table session closed. Your paid GST invoice is saved below.", "ok");
       }
     }
   });
@@ -345,7 +381,6 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   const openOnlineCheckout = () => {
     if (!bill) return;
     setPayAmountInput(String(bill.balance_due));
-    setSimulateFail(false);
     setPayModalOpen(true);
   };
 
@@ -374,8 +409,8 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         return;
       }
 
-      // Simulate brief gateway authorization latency before server HMAC verification
-      await new Promise((r) => setTimeout(r, 700));
+      // Brief simulated payment processing delay
+      await new Promise((r) => setTimeout(r, 600));
 
       const verifyRes = await fetch("/api/v1/payments/online/verify", {
         method: "POST",
@@ -384,34 +419,29 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
           payment_id: createData.payment.id,
           gateway_order_id: createData.gateway_order_id,
           gateway_payment_id:
-            createData.sandbox_challenge?.gateway_payment_id ?? "pay_live",
+            createData.sandbox_challenge?.gateway_payment_id ?? "pay_demo",
           gateway_signature:
-            createData.sandbox_challenge?.gateway_signature ?? "sig_live",
-          simulate_fail: simulateFail,
+            createData.sandbox_challenge?.gateway_signature ?? "sig_demo",
         }),
       });
       const verifyData = await verifyRes.json();
       if (!verifyRes.ok) {
-        showToast(verifyData.error ?? "Payment verification failed", "err");
+        showToast(verifyData.error ?? "Payment confirmation failed", "err");
         return;
       }
       setBill(verifyData.bill);
+      setSession((prev) =>
+        prev ? { ...prev, status: verifyData.bill.session_status } : prev
+      );
       setPayModalOpen(false);
-      if (verifyData.payment.status === "failed") {
-        playChime("alert");
-        showToast(
-          "Payment failed at gateway. Your balance remains unpaid — please retry or pay at counter.",
-          "err"
-        );
-      } else {
-        playChime("payment_success");
-        showToast(
-          `Verified ₹${verifyData.payment.amount} via Razorpay (${verifyData.payment.receipt_number})`,
-          "ok"
-        );
-        if (verifyData.bill.balance_due <= 0.01) {
-          setReceiptOpen(true);
-        }
+      playChime("payment_success");
+      showToast(
+        `Demo payment recorded: ${formatCurrency(verifyData.payment.amount)} (${verifyData.payment.receipt_number})`,
+        "ok"
+      );
+      if (verifyData.bill.balance_due <= 0.01) {
+        setActiveTab("bill");
+        setReceiptOpen(true);
       }
     } finally {
       setProcessingPay(false);
@@ -618,7 +648,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
             </div>
             <button
               type="button"
-              onClick={loadTableAndMenu}
+              onClick={() => loadTableAndMenu(true)}
               className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-900 underline"
             >
               <RefreshCw className="h-3.5 w-3.5" /> Start New Table Session
@@ -824,19 +854,31 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="font-serif text-xl font-semibold text-stone-900">
-                  Live Table Orders
+                  {sessionClosed ? "Completed Visit Orders" : "Live Table Orders"}
                 </h2>
                 <p className="text-xs text-stone-500">
-                  All orders in this session update live per dish — no refresh needed.
+                  {sessionClosed
+                    ? "Your session is settled. All ordered items and your GST receipt remain visible."
+                    : "All orders in this session update live per dish — no refresh needed."}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setActiveTab("menu")}
-                className="rounded-xl bg-[#C2410C] px-3 py-1.5 text-xs font-semibold text-white"
-              >
-                + Order More
-              </button>
+              {!sessionClosed ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("menu")}
+                  className="rounded-xl bg-[#C2410C] px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  + Order More
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("bill")}
+                  className="rounded-xl bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  View Paid Invoice
+                </button>
+              )}
             </div>
 
             {(bill?.orders ?? []).length === 0 ? (
@@ -1102,7 +1144,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                         className="flex items-center justify-center gap-2 rounded-xl bg-[#C2410C] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#9A3412]"
                       >
                         <Smartphone className="h-4 w-4" />
-                        Pay Online (UPI / Card)
+                        Demo Pay Online (UPI / Card)
                       </button>
                       <button
                         type="button"
@@ -1114,14 +1156,56 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                       </button>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => setReceiptOpen(true)}
-                      className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white"
-                    >
-                      <Receipt className="h-4 w-4" />
-                      View GST Tax Receipt
-                    </button>
+                    <div className="mt-5 space-y-4">
+                      {/* Inline Paid GST Tax Invoice kept permanently visible after payment */}
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 font-mono text-xs text-stone-800">
+                        <div className="border-b border-dashed border-emerald-300 pb-2 text-center">
+                          <p className="font-serif text-base font-bold text-stone-900">
+                            {settings?.name}
+                          </p>
+                          <p className="text-[11px] text-stone-500">{settings?.address}</p>
+                          <p className="text-[11px] text-stone-500">
+                            GSTIN: {settings?.gstin}
+                          </p>
+                          <p className="mt-1.5 font-semibold text-emerald-800">
+                            PAID GST TAX INVOICE · {table.table_number}
+                          </p>
+                        </div>
+                        <div className="mt-2.5 space-y-1">
+                          {bill.line_items.map((li, i) => (
+                            <div key={i} className="flex justify-between gap-2">
+                              <span>
+                                {li.quantity}× {li.item_name}
+                              </span>
+                              <span>{formatCurrency(li.item_total)}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2.5 space-y-1 border-t border-dashed border-emerald-300 pt-2">
+                          <div className="flex justify-between text-stone-600">
+                            <span>Subtotal</span>
+                            <span>{formatCurrency(bill.subtotal)}</span>
+                          </div>
+                          <div className="flex justify-between text-stone-600">
+                            <span>CGST + SGST ({bill.tax_rate_percent}%)</span>
+                            <span>{formatCurrency(bill.tax_amount)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm font-bold text-emerald-900">
+                            <span>TOTAL PAID</span>
+                            <span>{formatCurrency(bill.amount_paid)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setReceiptOpen(true)}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-800"
+                      >
+                        <Receipt className="h-4 w-4" />
+                        Print / Download GST Tax Receipt
+                      </button>
+                    </div>
                   )}
 
                   {bill.session_status === "payment_pending" && bill.balance_due > 0 && (
@@ -1152,7 +1236,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                     >
                       <div>
                         <p className="font-semibold text-stone-900">
-                          {p.receipt_number} · {p.method === "online" ? "Razorpay" : "Counter"} (
+                          {p.receipt_number} · {p.method === "online" ? "Demo Online" : "Counter"} (
                           {p.channel.toUpperCase()})
                         </p>
                         <p className="text-stone-500">
@@ -1452,14 +1536,14 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
         </div>
       )}
 
-      {/* ==================== RAZORPAY ONLINE CHECKOUT MODAL ==================== */}
+      {/* ==================== DEMO SIMULATED ONLINE PAYMENT MODAL ==================== */}
       {payModalOpen && bill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between border-b border-stone-100 pb-4">
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest text-sky-700">
-                  Razorpay Verified Checkout
+                <p className="text-[11px] font-bold uppercase tracking-widest text-[#C2410C]">
+                  Demo Payment — Simulated, No Real Charge
                 </p>
                 <h3 className="mt-1 font-serif text-lg font-semibold text-stone-900">
                   {settings?.name} · {table.table_number}
@@ -1472,6 +1556,11 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               >
                 <X className="h-4 w-4" />
               </button>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Demo payment — simulated, no real charge. Completing this form records a
+              simulated payment and generates your GST invoice.
             </div>
 
             <div className="mt-4">
@@ -1487,7 +1576,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                   step="0.01"
                   value={payAmountInput}
                   onChange={(e) => setPayAmountInput(e.target.value)}
-                  className="w-full rounded-xl border border-stone-200 px-3 py-2 font-mono text-base font-semibold outline-none focus:border-sky-600"
+                  className="w-full rounded-xl border border-stone-200 px-3 py-2 font-mono text-base font-semibold outline-none focus:border-[#C2410C]"
                 />
                 <button
                   type="button"
@@ -1508,28 +1597,30 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                 onClick={() => setPayChannel("upi")}
                 className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold ${
                   payChannel === "upi"
-                    ? "border-sky-600 bg-sky-50 text-sky-900"
+                    ? "border-[#C2410C] bg-orange-50 text-[#9A3412]"
                     : "border-stone-200 text-stone-600"
                 }`}
               >
-                <Smartphone className="h-4 w-4" /> UPI / GPay / PhonePe
+                <Smartphone className="h-4 w-4" /> Simulated UPI
               </button>
               <button
                 type="button"
                 onClick={() => setPayChannel("card")}
                 className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold ${
                   payChannel === "card"
-                    ? "border-sky-600 bg-sky-50 text-sky-900"
+                    ? "border-[#C2410C] bg-orange-50 text-[#9A3412]"
                     : "border-stone-200 text-stone-600"
                 }`}
               >
-                <CreditCard className="h-4 w-4" /> Credit / Debit Card
+                <CreditCard className="h-4 w-4" /> Simulated Card
               </button>
             </div>
 
             {payChannel === "upi" ? (
               <div className="mt-4">
-                <label className="text-xs font-medium text-stone-600">UPI ID</label>
+                <label className="text-xs font-medium text-stone-600">
+                  Demo UPI Handle
+                </label>
                 <input
                   type="text"
                   value={upiId}
@@ -1539,30 +1630,20 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
               </div>
             ) : (
               <div className="mt-4 rounded-xl bg-stone-50 p-3 text-xs text-stone-600">
-                Test Card •••• 4242 · Exp 12/29 · Server HMAC-SHA256 verification enabled
+                Simulated Test Card •••• 4242 · Exp 12/29 · No real card will be charged
               </div>
             )}
-
-            <label className="mt-4 flex cursor-pointer items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              <input
-                type="checkbox"
-                checked={simulateFail}
-                onChange={(e) => setSimulateFail(e.target.checked)}
-                className="accent-amber-700"
-              />
-              Simulate gateway decline (test unpaid balance preservation)
-            </label>
 
             <button
               type="button"
               disabled={processingPay}
               onClick={executeOnlinePayment}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-sky-700 py-3 text-sm font-semibold text-white transition hover:bg-sky-800 disabled:opacity-60"
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#C2410C] py-3 text-sm font-semibold text-white transition hover:bg-[#9A3412] disabled:opacity-60"
             >
               <Check className="h-4 w-4" />
               {processingPay
-                ? "Verifying Signature on Server..."
-                : `Pay ${formatCurrency(Number(payAmountInput) || 0)} Securely`}
+                ? "Recording Demo Payment..."
+                : `Confirm Demo Payment · ${formatCurrency(Number(payAmountInput) || 0)}`}
             </button>
           </div>
         </div>

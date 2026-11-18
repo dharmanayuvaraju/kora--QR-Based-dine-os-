@@ -40,12 +40,79 @@ declare global {
   var __koraDbVersion: number | undefined;
 }
 
+const LEGACY_IMAGE_MAP: Record<string, string> = {
+  "Guntur Chilli Chicken 65": "/dishes/chicken-65.jpg",
+  "Crispy Lotus Stem Manchurian": "/dishes/lotus-stem.jpg",
+  "24-Hour Black Dal Kora": "/dishes/black-dal.jpg",
+  "Paneer Lababdar Reserve": "/dishes/paneer-lababdar.jpg",
+  "Burnt Garlic & Sea Salt Naan": "/dishes/garlic-naan.jpg",
+  "Flaky Malabar Parotta": "/dishes/malabar-parotta.jpg",
+  "Kokum & Smoked Salt Fizz": "/dishes/kokum-fizz.jpg",
+  "Madras Filter Coffee Tonic": "/dishes/filter-coffee-tonic.jpg",
+  "Warm Saffron Rasmalai Tres Leches": "/dishes/saffron-rasmalai.jpg",
+};
+
+function healLegacyState(state: DatabaseState): boolean {
+  let changed = false;
+  for (const item of state.menu_items) {
+    const fixed = LEGACY_IMAGE_MAP[item.name];
+    if (fixed && item.image_url !== fixed && item.image_url.includes("unsplash.com")) {
+      item.image_url = fixed;
+      changed = true;
+    }
+  }
+  for (const p of state.payments) {
+    if (p.collected_by_name === "Razorpay UPI") {
+      p.collected_by_name = "Demo Online (UPI)";
+      changed = true;
+    } else if (p.collected_by_name === "Razorpay Card") {
+      p.collected_by_name = "Demo Online (Card)";
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+const DEFAULT_LOCAL_PASSWORDS: Record<string, string> = {
+  "owner@kora.in": "KoraOwner#2026",
+  "manager@kora.in": "KoraManager#2026",
+  "chef@kora.in": "KoraChef#2026",
+  "staff@kora.in": "KoraStaff#2026",
+  "ananya@kora.in": "KoraStaff#2026",
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __koraLocalPasswords: Record<string, string> | undefined;
+}
+
+export function registerLocalEmployeePassword(email: string, password: string): void {
+  if (!globalThis.__koraLocalPasswords) {
+    globalThis.__koraLocalPasswords = { ...DEFAULT_LOCAL_PASSWORDS };
+  }
+  globalThis.__koraLocalPasswords[email.trim().toLowerCase()] = password;
+}
+
+export function verifyLocalEmployeePassword(email: string, password: string): boolean {
+  if (!globalThis.__koraLocalPasswords) {
+    globalThis.__koraLocalPasswords = { ...DEFAULT_LOCAL_PASSWORDS };
+  }
+  const expected = globalThis.__koraLocalPasswords[email.trim().toLowerCase()];
+  if (!expected || !password) return false;
+  const a = Buffer.from(password, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function loadStateFromDisk(): DatabaseState {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, "utf8");
       const parsed = JSON.parse(raw) as DatabaseState;
       if (parsed && Array.isArray(parsed.restaurant_tables) && Array.isArray(parsed.menu_items)) {
+        if (healLegacyState(parsed)) {
+          saveStateToDisk(parsed);
+        }
         return parsed;
       }
     }
@@ -97,9 +164,11 @@ export async function ensureDbReady(): Promise<DatabaseState> {
     }
 
     if (data && data.payload && Array.isArray((data.payload as DatabaseState).restaurant_tables)) {
-      globalThis.__koraDbState = data.payload as DatabaseState;
+      const loaded = data.payload as DatabaseState;
+      const healed = healLegacyState(loaded);
+      globalThis.__koraDbState = loaded;
       globalThis.__koraDbVersion = Number(data.version ?? 1);
-      globalThis.__koraDbDirty = false;
+      globalThis.__koraDbDirty = healed;
       return globalThis.__koraDbState;
     }
 
@@ -1152,7 +1221,7 @@ export function initiateOnlinePayment(
     status: "processing",
     receipt_number: receiptNumber,
     collected_by: null,
-    collected_by_name: channel === "upi" ? "Razorpay UPI" : "Razorpay Card",
+    collected_by_name: channel === "upi" ? "Demo Online (UPI)" : "Demo Online (Card)",
     idempotency_key: idempotencyKey ?? crypto.randomUUID(),
     paid_at: null,
     created_at: nowIso,
@@ -1223,7 +1292,7 @@ export function verifyAndCompleteOnlinePayment(params: {
 
   addAudit(
     db,
-    { id: null, name: "Razorpay Gateway", role: "system" },
+    { id: null, name: "Demo Payment Simulator", role: "system" },
     "ONLINE_PAYMENT_VERIFIED",
     "payment",
     payment.id,

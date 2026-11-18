@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
 import { getDb, ensureDbReady, flushDb } from "@/lib/db/store";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   await ensureDbReady();
   try {
-  const auth = await requireRole(["chef", "manager", "owner"]);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
-  }
+    const auth = await requireRole(["chef"]);
+    if (!auth.ok) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
 
   const db = getDb();
   const pending = db.orders.filter((o) => o.status === "pending_approval");

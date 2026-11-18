@@ -5,7 +5,7 @@ import { ManagementSuite } from "@/components/ManagementSuite";
 
 export default function ManagerPage() {
   return (
-    <RoleAuthGate requiredRoles={["manager", "owner"]} preferredRole="manager">
+    <RoleAuthGate requiredRoles={["manager"]} preferredRole="manager">
       {({ user, logout }) => (
         <ManagementSuite user={user} logout={logout} mode="manager" />
       )}

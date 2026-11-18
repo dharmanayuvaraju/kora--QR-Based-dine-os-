@@ -3,6 +3,8 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth";
 import { getDb, getSessionBillSummary, recordExpense, ensureDbReady, flushDb } from "@/lib/db/store";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   await ensureDbReady();
   try {
