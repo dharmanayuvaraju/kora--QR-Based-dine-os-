@@ -15,10 +15,99 @@ A single responsive full-stack Next.js (App Router + TypeScript + Tailwind CSS) 
 
 ## Demo Employee Accounts (Signed HTTP-Only Cookie RBAC)
 
-- **Owner:** `owner@kora.in`
-- **Manager:** `manager@kora.in`
-- **Chef:** `chef@kora.in`
-- **Floor Staff:** `staff@kora.in` / `ananya@kora.in`
+- **Owner:** `owner@kora.in` (Password: `Owner#kora`)
+- **Manager:** `manager@kora.in` (Password: `KoraManager#2026`)
+- **Chef:** `chef@kora.in` (Password: `KoraChef#2026`)
+- **Floor Staff:** `staff@kora.in` / `ananya@kora.in` (Password: `KoraStaff#2026`)
+
+### Restaurant Owner Account Provisioning (A3Y Ops Only)
+
+To preserve enterprise security, KORA implements zero public self-signup. Restaurant Owner accounts are provisioned exclusively by A3Y Operations directly in the Supabase backend.
+
+**Account Provisioning Hierarchy:**
+1. **Owner Accounts:** Created exclusively by A3Y platform administrators in Supabase Auth & PostgreSQL. No public registration route exists.
+2. **Owner Console (`/owner` → "Employees & Roles"):** The Owner provisions accounts for Managers, Chefs, and Staff. The Owner defines the employee's full name, User ID (email), and initial password directly without invitation emails or email confirmation barriers.
+3. **Manager Console (`/manager` → "Staff & Chefs"):** Managers can provision Staff (Waiters) and Chefs only. The role dropdown restricts selection to Staff and Chef, and `/api/v1/users` enforces this server-side (returning `403 Forbidden` if a manager attempts to provision another manager or an owner).
+4. **Staff & Chef Consoles:** Cannot provision accounts (all creation routes blocked).
+
+**A3Y Onboarding Script (Run in Supabase SQL Editor):**
+```sql
+-- Step 1: Create the Owner in Supabase Auth with pre-confirmed email
+INSERT INTO auth.users (
+  instance_id,
+  id,
+  aud,
+  role,
+  email,
+  encrypted_password,
+  email_confirmed_at,
+  confirmed_at,
+  raw_app_meta_data,
+  raw_user_meta_data,
+  is_super_admin,
+  created_at,
+  updated_at
+) VALUES (
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'owner@restaurant.in', -- Restaurant owner email
+  crypt('TemporaryPassword#123', gen_salt('bf')), -- Strong initial password
+  NOW(),
+  NOW(),
+  '{"provider":"email","providers":["email"],"role":"owner"}'::jsonb,
+  '{"full_name":"Restaurant Owner Name","email_verified":true}'::jsonb,
+  FALSE,
+  NOW(),
+  NOW()
+)
+RETURNING id;
+
+-- Step 2: Insert into auth.identities
+INSERT INTO auth.identities (
+  id,
+  user_id,
+  identity_data,
+  provider,
+  provider_id,
+  last_sign_in_at,
+  created_at,
+  updated_at
+)
+SELECT
+  id,
+  id,
+  jsonb_build_object('sub', id::text, 'email', email, 'email_verified', true, 'phone_verified', false),
+  'email',
+  id::text,
+  NOW(),
+  NOW(),
+  NOW()
+FROM auth.users
+WHERE email = 'owner@restaurant.in';
+
+-- Step 3: Register in public.users table
+INSERT INTO public.users (
+  id,
+  full_name,
+  email,
+  role,
+  phone,
+  is_active
+)
+SELECT
+  id,
+  raw_user_meta_data->>'full_name',
+  email,
+  'owner',
+  '+91 98000 00000',
+  TRUE
+FROM auth.users
+WHERE email = 'owner@restaurant.in'
+ON CONFLICT (email) DO UPDATE
+SET is_active = TRUE;
+```
 
 ## Quick Start
 

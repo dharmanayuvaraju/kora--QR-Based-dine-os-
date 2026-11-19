@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  AlertCircle,
   AlertTriangle,
   BarChart3,
   BookOpen,
   Check,
+  CheckCircle2,
   ClipboardList,
+  Copy,
   CreditCard,
   Flag,
   LayoutGrid,
@@ -17,6 +20,7 @@ import {
   RotateCcw,
   Settings,
   ShieldAlert,
+  Trash2,
   TrendingUp,
   Users,
   Wallet,
@@ -26,7 +30,7 @@ import { ConsoleHeader } from "@/components/ConsoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { QrCodeCard } from "@/components/QrCodeCard";
 import { DietaryMark } from "@/components/DietaryMark";
-import { notifyLocalTabs, useRealtime } from "@/hooks/useRealtime";
+import { useRealtime } from "@/hooks/useRealtime";
 import { formatCurrency, formatTimeShort } from "@/lib/utils";
 import type {
   AuditLog,
@@ -132,6 +136,15 @@ export function ManagementSuite({
   const [newEmpEmail, setNewEmpEmail] = useState("");
   const [newEmpPassword, setNewEmpPassword] = useState("");
   const [newEmpRole, setNewEmpRole] = useState<UserRole>("staff");
+  const [empError, setEmpError] = useState<string | null>(null);
+  const [isCreatingEmp, setIsCreatingEmp] = useState(false);
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    full_name: string;
+    email: string;
+    role: UserRole;
+    temp_password: string;
+  } | null>(null);
+  const [copiedCreds, setCopiedCreds] = useState(false);
 
   const [newExpTitle, setNewExpTitle] = useState("");
   const [newExpCat, setNewExpCat] = useState<Expense["category"]>("ingredients");
@@ -163,7 +176,7 @@ export function ManagementSuite({
   };
 
   const loadDashboard = useCallback(async () => {
-    const res = await fetch(`/api/v1/owner/dashboard?t=${Date.now()}`, { cache: "no-store" });
+    const res = await fetch("/api/v1/owner/dashboard", { cache: "no-store" });
     if (res.ok) {
       const json = (await res.json()) as DashboardData;
       setData(json);
@@ -187,27 +200,27 @@ export function ManagementSuite({
   }> =
     isOwner
       ? [
-          { id: "overview", label: "Overview", icon: BarChart3 },
-          { id: "tables", label: "Tables & QR Studio", icon: QrCode },
-          { id: "orders", label: "Orders", icon: ClipboardList },
-          { id: "menu", label: "Menu & Pricing", icon: BookOpen },
-          { id: "payments", label: "Payments & Refunds", icon: CreditCard },
-          { id: "inventory", label: "Inventory", icon: Package },
-          { id: "expenses", label: "Expenses & P&L", icon: Wallet },
-          { id: "team", label: "Employees & Roles", icon: Users },
-          { id: "audit", label: "Audit Logs", icon: ShieldAlert },
-          { id: "settings", label: "Settings & GST", icon: Settings },
-        ]
+        { id: "overview", label: "Overview", icon: BarChart3 },
+        { id: "tables", label: "Tables & QR Studio", icon: QrCode },
+        { id: "orders", label: "Orders", icon: ClipboardList },
+        { id: "menu", label: "Menu & Pricing", icon: BookOpen },
+        { id: "payments", label: "Payments & Refunds", icon: CreditCard },
+        { id: "inventory", label: "Inventory", icon: Package },
+        { id: "expenses", label: "Expenses & P&L", icon: Wallet },
+        { id: "team", label: "Employees & Roles", icon: Users },
+        { id: "audit", label: "Audit Logs", icon: ShieldAlert },
+        { id: "settings", label: "Settings & GST", icon: Settings },
+      ]
       : [
-          { id: "overview", label: "Live Overview", icon: BarChart3 },
-          { id: "tables", label: "Floor Plan & Tables", icon: LayoutGrid },
-          { id: "orders", label: "Active Orders", icon: ClipboardList },
-          { id: "menu", label: "Menu Availability", icon: BookOpen },
-          { id: "payments", label: "Payments & Refunds", icon: CreditCard },
-          { id: "inventory", label: "Inventory", icon: Package },
-          { id: "team", label: "Staff & Chefs", icon: Users },
-          { id: "audit", label: "Activity Log", icon: ShieldAlert },
-        ];
+        { id: "overview", label: "Live Overview", icon: BarChart3 },
+        { id: "tables", label: "Floor Plan & Tables", icon: LayoutGrid },
+        { id: "orders", label: "Active Orders", icon: ClipboardList },
+        { id: "menu", label: "Menu Availability", icon: BookOpen },
+        { id: "payments", label: "Payments & Refunds", icon: CreditCard },
+        { id: "inventory", label: "Inventory", icon: Package },
+        { id: "team", label: "Staff & Chefs", icon: Users },
+        { id: "audit", label: "Activity Log", icon: ShieldAlert },
+      ];
 
   const apiCall = async (
     url: string,
@@ -226,10 +239,6 @@ export function ManagementSuite({
       return false;
     }
     if (successMsg) notify(successMsg, "ok");
-    notifyLocalTabs({
-      type: url.includes("low-stock") || url.includes("inventory") ? "inventory.updated" : "menu.updated",
-      message: successMsg ?? "Live dashboard update",
-    });
     await loadDashboard();
     return true;
   };
@@ -315,7 +324,7 @@ export function ManagementSuite({
                     }
                     className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-emerald-700 px-3 text-[11px] font-semibold text-white hover:bg-emerald-800"
                   >
-                    <Check className="h-3.5 w-3.5" strokeWidth={1.65} /> Resolve
+                    <Check className="h-3.5 w-3.5" /> Resolve
                   </button>
                 </div>
               </div>
@@ -347,11 +356,10 @@ export function ManagementSuite({
                   key={item.id}
                   type="button"
                   onClick={() => setTab(item.id)}
-                  className={`flex shrink-0 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-left text-xs font-semibold transition ${
-                    active
-                      ? "bg-stone-900 text-white shadow-xs"
-                      : "text-stone-600 hover:bg-white hover:text-stone-900"
-                  }`}
+                  className={`flex shrink-0 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-left text-xs font-semibold transition ${active
+                    ? "bg-stone-900 text-white shadow-xs"
+                    : "text-stone-600 hover:bg-white hover:text-stone-900"
+                    }`}
                 >
                   <Icon className="h-4 w-4 shrink-0" strokeWidth={1.65} />
                   <span>{item.label}</span>
@@ -370,15 +378,14 @@ export function ManagementSuite({
         <main className="min-w-0 flex-1 space-y-6">
           {notice && (
             <div
-              className={`flex items-center justify-between rounded-xl border px-4 py-3 text-xs font-medium ${
-                notice.tone === "err"
-                  ? "border-rose-200 bg-rose-50 text-rose-800"
-                  : "border-emerald-200 bg-emerald-50 text-emerald-900"
-              }`}
+              className={`flex items-center justify-between rounded-xl border px-4 py-3 text-xs font-medium ${notice.tone === "err"
+                ? "border-rose-200 bg-rose-50 text-rose-800"
+                : "border-emerald-200 bg-emerald-50 text-emerald-900"
+                }`}
             >
               <span>{notice.text}</span>
               <button type="button" onClick={() => setNotice(null)}>
-                <X className="h-4 w-4" strokeWidth={1.65} />
+                <X className="h-4 w-4" />
               </button>
             </div>
           )}
@@ -445,7 +452,7 @@ export function ManagementSuite({
                 {/* Payment Split & Channel Breakdown */}
                 <div className="rounded-2xl border border-stone-200 bg-white p-5 lg:col-span-5">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-stone-900">
-                    <TrendingUp className="h-4 w-4 text-[#C2410C]" strokeWidth={1.65} />
+                    <TrendingUp className="h-4 w-4 text-[#C2410C]" />
                     Payment Channel Mix
                   </h2>
                   <div className="mt-4 space-y-4">
@@ -486,7 +493,7 @@ export function ManagementSuite({
                   {data.kpis.low_stock_count > 0 && (
                     <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900">
                       <p className="flex items-center gap-1.5 font-semibold">
-                        <AlertTriangle className="h-4 w-4" strokeWidth={1.65} />
+                        <AlertTriangle className="h-4 w-4" />
                         {data.kpis.low_stock_count} Ingredient
                         {data.kpis.low_stock_count === 1 ? "" : "s"} Low on Stock
                       </p>
@@ -603,7 +610,7 @@ export function ManagementSuite({
                   type="submit"
                   className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C]"
                 >
-                  <Plus className="h-3.5 w-3.5" strokeWidth={1.65} /> Add Table + QR
+                  <Plus className="h-3.5 w-3.5" /> Add Table + QR
                 </button>
               </form>
 
@@ -698,8 +705,8 @@ export function ManagementSuite({
                             const hasDue = (t.bill?.balance_due ?? 0) > 0.01;
                             const reason = hasDue
                               ? window.prompt(
-                                  `${t.table_number} still has ₹${t.bill?.balance_due} unpaid. Enter manager force-close reason (audited):`
-                                )
+                                `${t.table_number} still has ₹${t.bill?.balance_due} unpaid. Enter manager force-close reason (audited):`
+                              )
                               : "";
                             if (hasDue && !reason?.trim()) return;
                             apiCall(
@@ -908,7 +915,7 @@ export function ManagementSuite({
                     type="submit"
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C] sm:col-span-2 lg:col-span-6"
                   >
-                    <Plus className="h-3.5 w-3.5" strokeWidth={1.65} /> Add New Dish to Digital Menu
+                    <Plus className="h-3.5 w-3.5" /> Add New Dish to Digital Menu
                   </button>
                 </form>
               )}
@@ -943,11 +950,10 @@ export function ManagementSuite({
                           </div>
                         </div>
                         <span
-                          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                            !isOut
-                              ? "bg-emerald-50 text-emerald-800"
-                              : "bg-rose-50 text-rose-800"
-                          }`}
+                          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${!isOut
+                            ? "bg-emerald-50 text-emerald-800"
+                            : "bg-rose-50 text-rose-800"
+                            }`}
                         >
                           {!isOut ? "Available" : "Sold Out"}
                         </span>
@@ -965,7 +971,7 @@ export function ManagementSuite({
                             className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-700"
                             aria-label={`Decrease stock for ${item.name}`}
                           >
-                            <Minus className="h-3.5 w-3.5" strokeWidth={1.65} />
+                            <Minus className="h-3.5 w-3.5" />
                           </button>
                           <input
                             type="number"
@@ -994,7 +1000,7 @@ export function ManagementSuite({
                             className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-700"
                             aria-label={`Increase stock for ${item.name}`}
                           >
-                            <Plus className="h-3.5 w-3.5" strokeWidth={1.65} />
+                            <Plus className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>
@@ -1106,7 +1112,7 @@ export function ManagementSuite({
                                   className="flex h-7 w-7 items-center justify-center rounded-md border border-stone-200 text-stone-700 hover:bg-stone-100"
                                   aria-label={`Decrease stock for ${item.name}`}
                                 >
-                                  <Minus className="h-3 w-3" strokeWidth={1.65} />
+                                  <Minus className="h-3 w-3" />
                                 </button>
                                 <input
                                   type="number"
@@ -1140,17 +1146,16 @@ export function ManagementSuite({
                                   className="flex h-7 w-7 items-center justify-center rounded-md border border-stone-200 text-stone-700 hover:bg-stone-100"
                                   aria-label={`Increase stock for ${item.name}`}
                                 >
-                                  <Plus className="h-3 w-3" strokeWidth={1.65} />
+                                  <Plus className="h-3 w-3" />
                                 </button>
                               </div>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3">
                               <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  !isOut
-                                    ? "bg-emerald-50 text-emerald-800"
-                                    : "bg-rose-50 text-rose-800"
-                                }`}
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${!isOut
+                                  ? "bg-emerald-50 text-emerald-800"
+                                  : "bg-rose-50 text-rose-800"
+                                  }`}
                               >
                                 {!isOut ? "Available" : "Sold Out"}
                               </span>
@@ -1262,13 +1267,12 @@ export function ManagementSuite({
                           </td>
                           <td className="px-4 py-3">
                             <span
-                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
-                                p.status === "paid"
-                                  ? "bg-emerald-50 text-emerald-800"
-                                  : p.status === "refunded"
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${p.status === "paid"
+                                ? "bg-emerald-50 text-emerald-800"
+                                : p.status === "refunded"
                                   ? "bg-amber-50 text-amber-800"
                                   : "bg-rose-50 text-rose-800"
-                              }`}
+                                }`}
                             >
                               {p.status}
                             </span>
@@ -1284,7 +1288,7 @@ export function ManagementSuite({
                                 }}
                                 className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
                               >
-                                <RotateCcw className="h-3 w-3" strokeWidth={1.65} /> Issue Refund
+                                <RotateCcw className="h-3 w-3" /> Issue Refund
                               </button>
                             )}
                           </td>
@@ -1382,9 +1386,8 @@ export function ManagementSuite({
                       <div className="flex justify-between font-semibold">
                         <span>{m.inventory_item_name}</span>
                         <span
-                          className={`font-mono ${
-                            m.quantity_delta >= 0 ? "text-emerald-700" : "text-rose-700"
-                          }`}
+                          className={`font-mono ${m.quantity_delta >= 0 ? "text-emerald-700" : "text-rose-700"
+                            }`}
                         >
                           {m.quantity_delta >= 0 ? "+" : ""}
                           {m.quantity_delta}
@@ -1524,68 +1527,219 @@ export function ManagementSuite({
           {/* ==================== EMPLOYEES & ROLES ==================== */}
           {tab === "team" && data && (
             <div className="space-y-5">
+              {/* Inline Error Banner */}
+              {empError && (
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" strokeWidth={1.65} />
+                    <span className="font-medium">{empError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEmpError(null)}
+                    className="rounded-md p-1 text-rose-600 hover:bg-rose-100 hover:text-rose-900"
+                    aria-label="Dismiss error"
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={1.65} />
+                  </button>
+                </div>
+              )}
+
+              {/* Newly Created Credentials Card */}
+              {createdCredentials && (
+                <div className="rounded-2xl border border-emerald-300 bg-emerald-50/80 p-4 text-emerald-950 shadow-xs">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" strokeWidth={1.65} />
+                      <div>
+                        <p className="text-sm font-bold text-emerald-950">Employee Account Provisioned</p>
+                        <p className="mt-0.5 text-xs text-emerald-800">
+                          Share these credentials directly with the employee. No email verification is required; they can log in immediately.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCreatedCredentials(null)}
+                      className="rounded-lg p-1 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-950"
+                      aria-label="Dismiss credentials card"
+                    >
+                      <X className="h-4 w-4" strokeWidth={1.65} />
+                    </button>
+                  </div>
+
+                  <div className="mt-3 grid gap-2.5 rounded-xl border border-emerald-200/80 bg-white p-3.5 text-xs sm:grid-cols-2 md:grid-cols-4">
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Full Name</span>
+                      <p className="font-semibold text-stone-900">{createdCredentials.full_name}</p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Assigned Role</span>
+                      <p className="font-semibold uppercase text-[#C2410C]">{createdCredentials.role}</p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">User ID (Email)</span>
+                      <p className="font-mono font-medium text-stone-900 select-all">{createdCredentials.email}</p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Initial Password</span>
+                      <p className="font-mono font-bold text-stone-900 select-all">{createdCredentials.temp_password}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const credsText = `KORA DineOS Credentials\nRole: ${createdCredentials.role.toUpperCase()}\nName: ${createdCredentials.full_name}\nUser ID: ${createdCredentials.email}\nPassword: ${createdCredentials.temp_password}\nSign-in URL: ${typeof window !== "undefined" ? window.location.origin : ""}/${createdCredentials.role}`;
+                        navigator.clipboard.writeText(credsText);
+                        setCopiedCreds(true);
+                        setTimeout(() => setCopiedCreds(false), 2500);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800"
+                    >
+                      {copiedCreds ? (
+                        <>
+                          <Check className="h-3.5 w-3.5" strokeWidth={1.65} />
+                          Copied to Clipboard!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5" strokeWidth={1.65} />
+                          Copy Credentials
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  if (!newEmpName.trim() || !newEmpEmail.trim() || !newEmpPassword) return;
-                  const ok = await apiCall(
-                    "/api/v1/users",
-                    "POST",
-                    {
+                  setEmpError(null);
+                  if (!newEmpName.trim() || !newEmpEmail.trim() || !newEmpPassword) {
+                    setEmpError("Please enter full name, employee email, and initial password.");
+                    return;
+                  }
+                  if (newEmpPassword.length < 8) {
+                    setEmpError("Password must be at least 8 characters.");
+                    return;
+                  }
+                  const roleToCreate: UserRole = isOwner
+                    ? newEmpRole
+                    : (newEmpRole === "manager" ? "staff" : newEmpRole);
+                  setIsCreatingEmp(true);
+                  try {
+                    const res = await fetch("/api/v1/users", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        full_name: newEmpName.trim(),
+                        email: newEmpEmail.trim(),
+                        password: newEmpPassword,
+                        role: roleToCreate,
+                      }),
+                    });
+                    const json = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      const errText = json.error || "Failed to create employee.";
+                      setEmpError(errText);
+                      notify(errText, "err");
+                      return;
+                    }
+
+                    setCreatedCredentials({
                       full_name: newEmpName.trim(),
                       email: newEmpEmail.trim(),
-                      password: newEmpPassword,
-                      role: newEmpRole,
-                    },
-                    `Created ${newEmpRole.toUpperCase()} account for ${newEmpName.trim()}`
-                  );
-                  if (ok) {
+                      role: roleToCreate,
+                      temp_password: newEmpPassword,
+                    });
                     setNewEmpName("");
                     setNewEmpEmail("");
                     setNewEmpPassword("");
+                    setNewEmpRole("staff");
+                    notify(`Created ${roleToCreate.toUpperCase()} account for ${newEmpName.trim()}`, "ok");
+                    await loadDashboard();
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : "Network error";
+                    setEmpError(msg);
+                    notify(msg, "err");
+                  } finally {
+                    setIsCreatingEmp(false);
                   }
                 }}
-                className="flex flex-wrap items-end gap-3 rounded-2xl border border-stone-200 bg-white p-4"
+                className="flex flex-wrap items-end gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-xs"
               >
-                <input
-                  type="text"
-                  required
-                  value={newEmpName}
-                  onChange={(e) => setNewEmpName(e.target.value)}
-                  placeholder="Full Name"
-                  className="min-w-[140px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
-                />
-                <input
-                  type="email"
-                  required
-                  value={newEmpEmail}
-                  onChange={(e) => setNewEmpEmail(e.target.value)}
-                  placeholder="employee@kora.in"
-                  className="min-w-[160px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
-                />
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  value={newEmpPassword}
-                  onChange={(e) => setNewEmpPassword(e.target.value)}
-                  placeholder="Initial password (8+ chars)"
-                  className="min-w-[160px] flex-1 rounded-xl border border-stone-200 px-3 py-2 text-xs"
-                />
-                <select
-                  value={newEmpRole}
-                  onChange={(e) => setNewEmpRole(e.target.value as UserRole)}
-                  className="rounded-xl border border-stone-200 px-3 py-2 text-xs font-medium"
-                >
-                  <option value="staff">Staff (Waiter)</option>
-                  <option value="chef">Chef (Kitchen)</option>
-                  {isOwner && <option value="manager">Manager</option>}
-                </select>
+                <div className="min-w-[140px] flex-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-stone-500">
+                    Full Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newEmpName}
+                    onChange={(e) => {
+                      setNewEmpName(e.target.value);
+                      if (empError) setEmpError(null);
+                    }}
+                    placeholder="e.g. Ramesh Kumar"
+                    className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+                  />
+                </div>
+                <div className="min-w-[160px] flex-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-stone-500">
+                    Employee User ID (Email)
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={newEmpEmail}
+                    onChange={(e) => {
+                      setNewEmpEmail(e.target.value);
+                      if (empError) setEmpError(null);
+                    }}
+                    placeholder="employee@kora.in"
+                    className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+                  />
+                </div>
+                <div className="min-w-[160px] flex-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-stone-500">
+                    Initial Password (8+ chars)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={newEmpPassword}
+                    onChange={(e) => {
+                      setNewEmpPassword(e.target.value);
+                      if (empError) setEmpError(null);
+                    }}
+                    placeholder="Set password directly"
+                    className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+                  />
+                </div>
+                <div className="w-36">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-stone-500">
+                    Role
+                  </label>
+                  <select
+                    value={!isOwner && newEmpRole === "manager" ? "staff" : newEmpRole}
+                    onChange={(e) => setNewEmpRole(e.target.value as UserRole)}
+                    className="mt-1 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium outline-none focus:border-[#C2410C]"
+                  >
+                    <option value="staff">Staff (Waiter)</option>
+                    <option value="chef">Chef (Kitchen)</option>
+                    {isOwner && <option value="manager">Manager</option>}
+                  </select>
+                </div>
                 <button
                   type="submit"
-                  className="rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C]"
+                  disabled={isCreatingEmp}
+                  className="rounded-xl bg-stone-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#C2410C] disabled:opacity-60"
                 >
-                  Create Employee
+                  {isCreatingEmp ? "Provisioning..." : "Create Employee"}
                 </button>
               </form>
 
@@ -1610,11 +1764,10 @@ export function ManagementSuite({
                           </p>
                         </div>
                         <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                            emp.is_active
-                              ? "bg-emerald-50 text-emerald-800"
-                              : "bg-stone-200 text-stone-600"
-                          }`}
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${emp.is_active
+                            ? "bg-emerald-50 text-emerald-800"
+                            : "bg-stone-200 text-stone-600"
+                            }`}
                         >
                           {emp.is_active ? "Active" : "Disabled"}
                         </span>
@@ -1624,20 +1777,43 @@ export function ManagementSuite({
                           {emp.role}
                         </span>
                         {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              apiCall(
-                                `/api/v1/users/${emp.id}`,
-                                "PATCH",
-                                { is_active: !emp.is_active },
-                                `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
-                              )
-                            }
-                            className="rounded-lg border border-stone-200 px-3 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-100"
-                          >
-                            {emp.is_active ? "Disable" : "Re-enable"}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                apiCall(
+                                  `/api/v1/users/${emp.id}`,
+                                  "PATCH",
+                                  { is_active: !emp.is_active },
+                                  `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
+                                )
+                              }
+                              className="rounded-lg border border-stone-200 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                            >
+                              {emp.is_active ? "Disable" : "Re-enable"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (
+                                  !window.confirm(
+                                    `Permanently delete ${emp.full_name} (${emp.email})? This cannot be undone.`
+                                  )
+                                )
+                                  return;
+                                await apiCall(
+                                  `/api/v1/users/${emp.id}`,
+                                  "DELETE",
+                                  undefined,
+                                  `Permanently deleted ${emp.full_name}`
+                                );
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300"
+                            >
+                              <Trash2 className="h-3 w-3" strokeWidth={1.65} />
+                              Delete
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -1675,31 +1851,53 @@ export function ManagementSuite({
                             </td>
                             <td className="whitespace-nowrap px-4 py-3">
                               <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  emp.is_active
-                                    ? "bg-emerald-50 text-emerald-800"
-                                    : "bg-stone-200 text-stone-600"
-                                }`}
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${emp.is_active
+                                  ? "bg-emerald-50 text-emerald-800"
+                                  : "bg-stone-200 text-stone-600"
+                                  }`}
                               >
                                 {emp.is_active ? "Active" : "Disabled"}
                               </span>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-right">
                               {canEdit && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    apiCall(
-                                      `/api/v1/users/${emp.id}`,
-                                      "PATCH",
-                                      { is_active: !emp.is_active },
-                                      `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
-                                    )
-                                  }
-                                  className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
-                                >
-                                  {emp.is_active ? "Disable" : "Re-enable"}
-                                </button>
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      apiCall(
+                                        `/api/v1/users/${emp.id}`,
+                                        "PATCH",
+                                        { is_active: !emp.is_active },
+                                        `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
+                                      )
+                                    }
+                                    className="rounded-lg border border-stone-200 px-2 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                                  >
+                                    {emp.is_active ? "Disable" : "Re-enable"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      if (
+                                        !window.confirm(
+                                          `Permanently delete ${emp.full_name} (${emp.email})? This cannot be undone.`
+                                        )
+                                      )
+                                        return;
+                                      await apiCall(
+                                        `/api/v1/users/${emp.id}`,
+                                        "DELETE",
+                                        undefined,
+                                        `Permanently deleted ${emp.full_name}`
+                                      );
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300"
+                                  >
+                                    <Trash2 className="h-3 w-3" strokeWidth={1.65} />
+                                    Delete
+                                  </button>
+                                </div>
                               )}
                             </td>
                           </tr>
@@ -2021,11 +2219,10 @@ export function ManagementSuite({
                     key={t}
                     type="button"
                     onClick={() => setStockType(t)}
-                    className={`rounded-xl border py-2 text-xs font-semibold capitalize ${
-                      stockType === t
-                        ? "border-stone-900 bg-stone-900 text-white"
-                        : "border-stone-200 text-stone-700"
-                    }`}
+                    className={`rounded-xl border py-2 text-xs font-semibold capitalize ${stockType === t
+                      ? "border-stone-900 bg-stone-900 text-white"
+                      : "border-stone-200 text-stone-700"
+                      }`}
                   >
                     {t}
                   </button>

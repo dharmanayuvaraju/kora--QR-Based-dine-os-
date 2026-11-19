@@ -105,7 +105,7 @@ function healLegacyState(state: DatabaseState): boolean {
 }
 
 const DEFAULT_LOCAL_PASSWORDS: Record<string, string> = {
-  "owner@kora.in": "KoraOwner#2026",
+  "owner@kora.in": "Owner#kora",
   "manager@kora.in": "KoraManager#2026",
   "chef@kora.in": "KoraChef#2026",
   "staff@kora.in": "KoraStaff#2026",
@@ -1948,7 +1948,7 @@ export function assignStaffToTable(
 }
 
 export function createEmployee(
-  data: { full_name: string; email: string; role: UserRole; phone?: string },
+  data: { full_name: string; email: string; role: UserRole; phone?: string; id?: string },
   actor: SessionPayload
 ): User {
   const db = getDb();
@@ -1960,11 +1960,11 @@ export function createEmployee(
   }
   const email = data.email.trim().toLowerCase();
   if (db.users.some((u) => u.email.toLowerCase() === email)) {
-    throw new Error("An employee with this email already exists.");
+    throw new Error("An account with this user ID already exists.");
   }
 
   const user: User = {
-    id: crypto.randomUUID(),
+    id: data.id ?? crypto.randomUUID(),
     full_name: data.full_name.trim(),
     email,
     role: data.role,
@@ -2007,6 +2007,46 @@ export function toggleEmployeeActive(userId: string, isActive: boolean, actor: S
     target.id,
     { full_name: target.full_name, role: target.role }
   );
+  commitDb();
+  return target;
+}
+
+export function deleteEmployee(userId: string, actor: SessionPayload): User {
+  const db = getDb();
+  const index = db.users.findIndex((u) => u.id === userId);
+  if (index === -1) throw new Error("Employee not found");
+  const target = db.users[index];
+
+  if (actor.role === "manager" && !["staff", "chef"].includes(target.role)) {
+    throw new Error("Managers cannot delete Owner or Manager accounts.");
+  }
+  if (actor.role !== "owner" && actor.role !== "manager") {
+    throw new Error("Unauthorized");
+  }
+  if (target.id === actor.userId) {
+    throw new Error("You cannot delete your own account.");
+  }
+
+  // Remove table assignments for this staff member
+  db.table_assignments = db.table_assignments.filter((a) => a.staff_id !== userId);
+
+  // Remove from users array
+  db.users.splice(index, 1);
+
+  // Remove local cached password if present
+  if (globalThis.__koraLocalPasswords) {
+    delete globalThis.__koraLocalPasswords[target.email.toLowerCase()];
+  }
+
+  addAudit(
+    db,
+    { id: actor.userId, name: actor.fullName, role: actor.role },
+    "EMPLOYEE_DELETED",
+    "user",
+    target.id,
+    { full_name: target.full_name, role: target.role, email: target.email }
+  );
+
   commitDb();
   return target;
 }
