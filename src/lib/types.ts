@@ -155,6 +155,8 @@ export interface OrderItem {
   status: OrderItemStatus;
   instructions: string | null;
   addons: OrderItemAddon[];
+  cancellation_reason?: string | null;
+  cancelled_at?: string | null;
   started_at: string | null;
   ready_at: string | null;
   served_at: string | null;
@@ -328,6 +330,18 @@ export interface SessionBillSummary {
   payments: Payment[];
 }
 
+export interface PasswordResetRequest {
+  id: string;
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: UserRole;
+  status: "pending" | "resolved";
+  created_at: string;
+  resolved_at?: string;
+  resolved_by?: string;
+}
+
 export interface RealtimeEvent {
   id: string;
   type:
@@ -345,7 +359,8 @@ export interface RealtimeEvent {
     | "session.closed"
     | "menu.updated"
     | "table.updated"
-    | "inventory.updated";
+    | "inventory.updated"
+    | "auth.password_reset_requested";
   channel: string;
   session_id?: string;
   table_number?: string;
@@ -375,4 +390,5 @@ export interface DatabaseState {
   low_stock_flags: LowStockFlag[];
   expenses: Expense[];
   audit_logs: AuditLog[];
+  password_reset_requests?: PasswordResetRequest[];
 }

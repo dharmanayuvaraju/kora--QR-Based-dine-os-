@@ -5,6 +5,7 @@ import {
   AlertCircle,
   AlertTriangle,
   BarChart3,
+  Bell,
   BookOpen,
   Check,
   CheckCircle2,
@@ -12,6 +13,8 @@ import {
   Copy,
   CreditCard,
   Flag,
+  Image as ImageIcon,
+  KeyRound,
   LayoutGrid,
   Minus,
   Package,
@@ -22,6 +25,7 @@ import {
   ShieldAlert,
   Trash2,
   TrendingUp,
+  Upload,
   Users,
   Wallet,
   X,
@@ -49,6 +53,7 @@ import type {
   TableSession,
   User,
   UserRole,
+  PasswordResetRequest,
 } from "@/lib/types";
 
 interface DashboardData {
@@ -88,6 +93,8 @@ interface DashboardData {
   categories: MenuCategory[];
   menu_items: MenuItem[];
   users: User[];
+  orphaned_user_ids?: string[];
+  password_reset_requests?: PasswordResetRequest[];
   inventory_items: InventoryItem[];
   inventory_movements: InventoryMovement[];
   low_stock_flags: LowStockFlag[];
@@ -131,6 +138,21 @@ export function ManagementSuite({
   const [newItemPrice, setNewItemPrice] = useState("");
   const [newItemCat, setNewItemCat] = useState("");
   const [newItemDiet, setNewItemDiet] = useState<"veg" | "non_veg" | "vegan">("veg");
+  const [newItemImageUrl, setNewItemImageUrl] = useState("");
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [imageUploadErr, setImageUploadErr] = useState<string | null>(null);
+
+  // Edit Dish Modal State
+  const [editingDish, setEditingDish] = useState<MenuItem | null>(null);
+  const [editDishName, setEditDishName] = useState("");
+  const [editDishDesc, setEditDishDesc] = useState("");
+  const [editDishPrice, setEditDishPrice] = useState("");
+  const [editDishCat, setEditDishCat] = useState("");
+  const [editDishDiet, setEditDishDiet] = useState<"veg" | "non_veg" | "vegan">("veg");
+  const [editDishImageUrl, setEditDishImageUrl] = useState("");
+  const [isUploadingEditImage, setIsUploadingEditImage] = useState(false);
+  const [editImageErr, setEditImageErr] = useState<string | null>(null);
+  const [isSavingEditDish, setIsSavingEditDish] = useState(false);
 
   const [newEmpName, setNewEmpName] = useState("");
   const [newEmpEmail, setNewEmpEmail] = useState("");
@@ -145,6 +167,14 @@ export function ManagementSuite({
     temp_password: string;
   } | null>(null);
   const [copiedCreds, setCopiedCreds] = useState(false);
+  const [empToDelete, setEmpToDelete] = useState<User | null>(null);
+  const [isDeletingEmpId, setIsDeletingEmpId] = useState<string | null>(null);
+  const [isTogglingEmpId, setIsTogglingEmpId] = useState<string | null>(null);
+
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<User | null>(null);
+  const [newPasswordVal, setNewPasswordVal] = useState("");
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [resetPasswordErr, setResetPasswordErr] = useState<string | null>(null);
 
   const [newExpTitle, setNewExpTitle] = useState("");
   const [newExpCat, setNewExpCat] = useState<Expense["category"]>("ingredients");
@@ -242,6 +272,219 @@ export function ManagementSuite({
     await loadDashboard();
     return true;
   };
+
+  const handleToggleEmployeeStatus = async (emp: User) => {
+    const nextActive = !emp.is_active;
+    setIsTogglingEmpId(emp.id);
+
+    // Optimistic UI update: flip status immediately for responsive 1-click tactile response
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            users: prev.users.map((u) =>
+              u.id === emp.id ? { ...u, is_active: nextActive } : u
+            ),
+          }
+        : null
+    );
+
+    try {
+      const res = await fetch(`/api/v1/users/${emp.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: nextActive }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Revert on failure
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                users: prev.users.map((u) =>
+                  u.id === emp.id ? { ...u, is_active: !nextActive } : u
+                ),
+              }
+            : null
+        );
+        notify(json.error || "Could not update employee status.", "err");
+      } else {
+        notify(
+          `${emp.full_name} is now ${nextActive ? "Active" : "Disabled"}.`,
+          "ok"
+        );
+        void loadDashboard();
+      }
+    } catch {
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              users: prev.users.map((u) =>
+                u.id === emp.id ? { ...u, is_active: !nextActive } : u
+              ),
+            }
+          : null
+      );
+      notify("Network error while updating employee status.", "err");
+    } finally {
+      setIsTogglingEmpId(null);
+    }
+  };
+
+  const handleConfirmDeleteEmployee = async () => {
+    if (!empToDelete) return;
+    const target = empToDelete;
+    setIsDeletingEmpId(target.id);
+    setEmpToDelete(null);
+
+    // Optimistic UI update: remove row immediately without blocking or freezing UI
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            users: prev.users.filter((u) => u.id !== target.id),
+          }
+        : null
+    );
+
+    try {
+      const res = await fetch(`/api/v1/users/${target.id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        notify(json.error || "Could not delete employee.", "err");
+        await loadDashboard();
+      } else {
+        notify(`Permanently deleted ${target.full_name}.`, "ok");
+        void loadDashboard();
+      }
+    } catch {
+      notify("Network error while deleting employee.", "err");
+      await loadDashboard();
+    } finally {
+      setIsDeletingEmpId(null);
+    }
+  };
+
+  const handleImageFileUpload = async (file: File) => {
+    setIsUploadingImage(true);
+    setImageUploadErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/v1/menu/upload-image", {
+        method: "POST",
+        body: fd,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = json.error || "Failed to upload image.";
+        setImageUploadErr(err);
+        notify(err, "err");
+      } else if (json.url) {
+        setNewItemImageUrl(json.url);
+        notify("Photo uploaded successfully!", "ok");
+      }
+    } catch {
+      setImageUploadErr("Network error while uploading image.");
+      notify("Network error while uploading image.", "err");
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const openEditDishModal = (item: MenuItem) => {
+    setEditingDish(item);
+    setEditDishName(item.name);
+    setEditDishDesc(item.description || "");
+    setEditDishPrice(String(item.price));
+    setEditDishCat(item.category_id);
+    setEditDishDiet(item.dietary === "non_veg" || item.dietary === "vegan" ? item.dietary : "veg");
+    setEditDishImageUrl(item.image_url || "");
+    setEditImageErr(null);
+  };
+
+  const handleEditImageFileUpload = async (file: File) => {
+    setIsUploadingEditImage(true);
+    setEditImageErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/v1/menu/upload-image", {
+        method: "POST",
+        body: fd,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditImageErr(json.error || "Failed to upload photo.");
+        notify(json.error || "Failed to upload photo.", "err");
+      } else if (json.url) {
+        setEditDishImageUrl(json.url);
+        notify("Dish photo uploaded successfully!", "ok");
+      }
+    } catch {
+      setEditImageErr("Network error while uploading photo.");
+      notify("Network error while uploading photo.", "err");
+    } finally {
+      setIsUploadingEditImage(false);
+    }
+  };
+
+  const handleSaveEditDish = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDish) return;
+    const cleanName = editDishName.trim();
+    if (!cleanName) {
+      notify("Dish name cannot be empty.", "err");
+      return;
+    }
+    const priceNum = Number(editDishPrice);
+    if (!priceNum || priceNum < 1) {
+      notify("Please enter a valid price.", "err");
+      return;
+    }
+
+    // Duplicate check on edit (case-insensitive, exclude self)
+    const isDup = data?.menu_items.some(
+      (m) =>
+        m.id !== editingDish.id &&
+        !m.deleted_at &&
+        m.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (isDup) {
+      notify(`A dish named "${cleanName}" already exists on the menu.`, "err");
+      return;
+    }
+
+    setIsSavingEditDish(true);
+    try {
+      const ok = await apiCall(
+        `/api/v1/menu/items/${editingDish.id}`,
+        "PATCH",
+        {
+          name: cleanName,
+          description: editDishDesc.trim(),
+          price: priceNum,
+          category_id: editDishCat,
+          dietary: editDishDiet,
+          image_url: editDishImageUrl.trim() || editingDish.image_url,
+        },
+        `Updated dish "${cleanName}"`
+      );
+      if (ok) {
+        setEditingDish(null);
+      }
+    } finally {
+      setIsSavingEditDish(false);
+    }
+  };
+
+  const pendingResets = (data?.password_reset_requests ?? []).filter(
+    (r) => r.status === "pending"
+  );
 
   const staffUsers = (data?.users ?? []).filter(
     (u) => u.role === "staff" && u.is_active
@@ -366,6 +609,12 @@ export function ManagementSuite({
                   {item.id === "menu" && openFlags.length > 0 && (
                     <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 font-mono text-[10px] font-bold text-stone-950">
                       {openFlags.length}
+                    </span>
+                  )}
+                  {item.id === "team" && isOwner && pendingResets.length > 0 && (
+                    <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-rose-600 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white animate-pulse">
+                      <Bell className="h-2.5 w-2.5" />
+                      {pendingResets.length}
                     </span>
                   )}
                 </button>
@@ -842,23 +1091,41 @@ export function ManagementSuite({
                 <form
                   onSubmit={async (e) => {
                     e.preventDefault();
-                    if (!newItemName.trim() || !newItemPrice || !newItemCat) return;
+                    const trimmedName = newItemName.trim();
+                    if (!trimmedName || !newItemPrice || !newItemCat) return;
+
+                    const isDup = data.menu_items.some(
+                      (m) =>
+                        !m.deleted_at &&
+                        m.name.trim().toLowerCase() === trimmedName.toLowerCase()
+                    );
+                    if (isDup) {
+                      notify(
+                        `A dish named "${trimmedName}" already exists on the menu.`,
+                        "err"
+                      );
+                      return;
+                    }
+
                     const ok = await apiCall(
                       "/api/v1/menu/items",
                       "POST",
                       {
-                        name: newItemName.trim(),
+                        name: trimmedName,
                         description: newItemDesc.trim(),
                         price: Number(newItemPrice),
                         category_id: newItemCat,
                         dietary: newItemDiet,
+                        image_url: newItemImageUrl.trim() || undefined,
                       },
-                      `Added "${newItemName.trim()}" to live menu`
+                      `Added "${trimmedName}" to live menu`
                     );
                     if (ok) {
                       setNewItemName("");
                       setNewItemDesc("");
                       setNewItemPrice("");
+                      setNewItemImageUrl("");
+                      setImageUploadErr(null);
                     }
                   }}
                   className="grid gap-3 rounded-2xl border border-stone-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-6"
@@ -883,7 +1150,7 @@ export function ManagementSuite({
                     onChange={(e) => setNewItemCat(e.target.value)}
                     className="rounded-xl border border-stone-200 px-3 py-2 text-xs"
                   >
-                    {data.categories.map((c) => (
+                    {(data?.categories ?? []).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
@@ -911,6 +1178,59 @@ export function ManagementSuite({
                       <option value="vegan">Vegan</option>
                     </select>
                   </div>
+
+                  {/* Photo Upload & URL Field */}
+                  <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-dashed border-stone-200 bg-stone-50/70 p-2.5 sm:col-span-2 lg:col-span-6">
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 shadow-2xs hover:bg-stone-50">
+                      <Upload className="h-3.5 w-3.5 text-stone-500" strokeWidth={1.75} />
+                      {isUploadingImage ? "Uploading..." : "Upload Photo"}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/avif"
+                        disabled={isUploadingImage}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void handleImageFileUpload(f);
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                    <div className="relative min-w-[220px] flex-1">
+                      <input
+                        type="text"
+                        value={newItemImageUrl}
+                        onChange={(e) => setNewItemImageUrl(e.target.value)}
+                        placeholder="Or enter image URL (https://... or /dishes/...)"
+                        className="w-full rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-[#C2410C]"
+                      />
+                    </div>
+                    {newItemImageUrl && (
+                      <div className="flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white p-1">
+                        <img
+                          src={newItemImageUrl}
+                          alt="Dish thumbnail"
+                          className="h-7 w-7 rounded object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = "/dishes/black-dal.jpg";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setNewItemImageUrl("")}
+                          className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                          title="Remove photo"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
+                    {imageUploadErr && (
+                      <span className="text-xs font-medium text-rose-600">
+                        {imageUploadErr}
+                      </span>
+                    )}
+                  </div>
+
                   <button
                     type="submit"
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C] sm:col-span-2 lg:col-span-6"
@@ -933,14 +1253,24 @@ export function ManagementSuite({
                       className="rounded-2xl border border-stone-200 bg-white p-4"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex min-w-0 items-start gap-2">
-                          <span className="mt-0.5 shrink-0">
-                            <DietaryMark dietary={item.dietary} />
-                          </span>
+                        <div className="flex min-w-0 items-start gap-2.5">
+                          <img
+                            src={item.image_url || "/dishes/black-dal.jpg"}
+                            alt={item.name}
+                            className="h-12 w-12 shrink-0 rounded-xl object-cover border border-stone-200"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = "/dishes/black-dal.jpg";
+                            }}
+                          />
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-stone-900">
-                              {item.name}
-                            </p>
+                            <div className="flex items-center gap-1.5">
+                              <span className="shrink-0">
+                                <DietaryMark dietary={item.dietary} />
+                              </span>
+                              <p className="text-sm font-semibold text-stone-900">
+                                {item.name}
+                              </p>
+                            </div>
                             <p className="text-[11px] text-stone-500">
                               {catName} ·{" "}
                               <span className="font-mono font-semibold text-stone-900">
@@ -1024,22 +1354,10 @@ export function ManagementSuite({
                           <>
                             <button
                               type="button"
-                              onClick={() => {
-                                const nextPrice = window.prompt(
-                                  `Update price for ${item.name} (₹):`,
-                                  String(item.price)
-                                );
-                                if (!nextPrice || !Number(nextPrice)) return;
-                                apiCall(
-                                  `/api/v1/menu/items/${item.id}`,
-                                  "PATCH",
-                                  { price: Number(nextPrice) },
-                                  `Updated price of ${item.name} to ₹${nextPrice}`
-                                );
-                              }}
+                              onClick={() => openEditDishModal(item)}
                               className="min-h-[38px] rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
                             >
-                              Edit ₹
+                              Edit Dish
                             </button>
                             <button
                               type="button"
@@ -1088,10 +1406,20 @@ export function ManagementSuite({
                         return (
                           <tr key={item.id}>
                             <td className="px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <DietaryMark dietary={item.dietary} />
-                                <div>
-                                  <p className="font-semibold text-stone-900">{item.name}</p>
+                              <div className="flex items-center gap-3">
+                                <img
+                                  src={item.image_url || "/dishes/black-dal.jpg"}
+                                  alt={item.name}
+                                  className="h-10 w-10 shrink-0 rounded-lg object-cover border border-stone-200"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = "/dishes/black-dal.jpg";
+                                  }}
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <DietaryMark dietary={item.dietary} />
+                                    <p className="font-semibold text-stone-900">{item.name}</p>
+                                  </div>
                                   <p className="line-clamp-1 text-[11px] text-stone-400">
                                     {item.description}
                                   </p>
@@ -1180,22 +1508,10 @@ export function ManagementSuite({
                                   <>
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        const nextPrice = window.prompt(
-                                          `Update price for ${item.name} (₹):`,
-                                          String(item.price)
-                                        );
-                                        if (!nextPrice || !Number(nextPrice)) return;
-                                        apiCall(
-                                          `/api/v1/menu/items/${item.id}`,
-                                          "PATCH",
-                                          { price: Number(nextPrice) },
-                                          `Updated price of ${item.name} to ₹${nextPrice}`
-                                        );
-                                      }}
+                                      onClick={() => openEditDishModal(item)}
                                       className="rounded-lg border border-stone-200 px-2.5 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
                                     >
-                                      Edit ₹
+                                      Edit
                                     </button>
                                     <button
                                       type="button"
@@ -1527,6 +1843,92 @@ export function ManagementSuite({
           {/* ==================== EMPLOYEES & ROLES ==================== */}
           {tab === "team" && data && (
             <div className="space-y-5">
+              {/* Owner Notification: Pending Password Reset Requests */}
+              {isOwner && pendingResets.length > 0 && (
+                <div className="rounded-2xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-950 shadow-xs">
+                  <div className="flex items-center gap-2 font-bold text-amber-950">
+                    <Bell className="h-4 w-4 text-amber-700" strokeWidth={1.75} />
+                    <span>
+                      {pendingResets.length} Password Reset Request
+                      {pendingResets.length === 1 ? "" : "s"} Pending
+                    </span>
+                  </div>
+                  <p className="mt-1 text-stone-600">
+                    Staff members below requested password resets. Set a new password for them directly from here:
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {pendingResets.map((req) => (
+                      <div
+                        key={req.id}
+                        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-amber-200 bg-white p-3 shadow-2xs"
+                      >
+                        <div>
+                          <p className="font-bold text-stone-900">
+                            {req.full_name}{" "}
+                            <span className="font-mono font-normal text-stone-500">
+                              ({req.email})
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-stone-500">
+                            Role:{" "}
+                            <span className="font-semibold uppercase text-[#C2410C]">
+                              {req.role}
+                            </span>{" "}
+                            · Requested {formatTimeShort(req.created_at)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const emp = data.users.find(
+                              (u) =>
+                                u.id === req.user_id ||
+                                u.email.toLowerCase() === req.email.toLowerCase()
+                            );
+                            if (emp) {
+                              setResetPasswordTarget(emp);
+                              setNewPasswordVal("");
+                              setResetPasswordErr(null);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#C2410C] px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-[#9A3412]"
+                        >
+                          <KeyRound className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          Set New Password
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Owner Notification: Orphaned Records Cleanup */}
+              {isOwner && data.orphaned_user_ids && data.orphaned_user_ids.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-950 shadow-xs">
+                  <div>
+                    <div className="flex items-center gap-2 font-bold text-amber-900">
+                      <AlertTriangle className="h-4 w-4 text-amber-600" strokeWidth={1.75} />
+                      Detected {data.orphaned_user_ids.length} Orphaned Employee Record(s)
+                    </div>
+                    <p className="mt-0.5 text-stone-600">
+                      These rows exist in database rosters but have no corresponding Supabase Auth credentials.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      for (const id of data.orphaned_user_ids!) {
+                        await fetch(`/api/v1/users/${id}`, { method: "DELETE" });
+                      }
+                      notify("Orphaned records successfully removed.", "ok");
+                      await loadDashboard();
+                    }}
+                    className="rounded-xl bg-stone-900 px-3.5 py-2 font-semibold text-white hover:bg-stone-800"
+                  >
+                    Clean Up Orphaned Records
+                  </button>
+                </div>
+              )}
               {/* Inline Error Banner */}
               {empError && (
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800 shadow-xs">
@@ -1746,9 +2148,18 @@ export function ManagementSuite({
               {/* Mobile stacked cards (<640px) */}
               <div className="space-y-3 sm:hidden">
                 {data.users.map((emp) => {
-                  const canEdit =
-                    emp.id !== user.id &&
+                  const isSelf = emp.id === user.id;
+                  const canToggle =
+                    !isSelf &&
                     (isOwner || emp.role === "staff" || emp.role === "chef");
+                  const canDelete = isOwner && !isSelf;
+                  const canResetPass = isOwner && !isSelf;
+                  const hasPendingReset = pendingResets.some(
+                    (r) =>
+                      r.user_id === emp.id ||
+                      r.email.toLowerCase() === emp.email.toLowerCase()
+                  );
+                  const isOrphaned = Boolean(data.orphaned_user_ids?.includes(emp.id));
                   return (
                     <div
                       key={emp.id}
@@ -1756,18 +2167,31 @@ export function ManagementSuite({
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-stone-900">
-                            {emp.full_name}
-                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="text-sm font-semibold text-stone-900">
+                              {emp.full_name}
+                            </p>
+                            {hasPendingReset && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                Reset Requested
+                              </span>
+                            )}
+                            {isOrphaned && (
+                              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                                Orphaned
+                              </span>
+                            )}
+                          </div>
                           <p className="truncate font-mono text-xs text-stone-500">
                             {emp.email}
                           </p>
                         </div>
                         <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${emp.is_active
-                            ? "bg-emerald-50 text-emerald-800"
-                            : "bg-stone-200 text-stone-600"
-                            }`}
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            emp.is_active
+                              ? "bg-emerald-50 text-emerald-800"
+                              : "bg-stone-200 text-stone-600"
+                          }`}
                         >
                           {emp.is_active ? "Active" : "Disabled"}
                         </span>
@@ -1776,45 +2200,47 @@ export function ManagementSuite({
                         <span className="text-xs font-semibold uppercase text-[#C2410C]">
                           {emp.role}
                         </span>
-                        {canEdit && (
-                          <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {canResetPass && (
                             <button
                               type="button"
-                              onClick={() =>
-                                apiCall(
-                                  `/api/v1/users/${emp.id}`,
-                                  "PATCH",
-                                  { is_active: !emp.is_active },
-                                  `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
-                                )
-                              }
-                              className="rounded-lg border border-stone-200 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-100"
-                            >
-                              {emp.is_active ? "Disable" : "Re-enable"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (
-                                  !window.confirm(
-                                    `Permanently delete ${emp.full_name} (${emp.email})? This cannot be undone.`
-                                  )
-                                )
-                                  return;
-                                await apiCall(
-                                  `/api/v1/users/${emp.id}`,
-                                  "DELETE",
-                                  undefined,
-                                  `Permanently deleted ${emp.full_name}`
-                                );
+                              onClick={() => {
+                                setResetPasswordTarget(emp);
+                                setNewPasswordVal("");
+                                setResetPasswordErr(null);
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300"
+                              className="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                            >
+                              <KeyRound className="h-3 w-3" strokeWidth={1.65} />
+                              Password
+                            </button>
+                          )}
+                          {canToggle && (
+                            <button
+                              type="button"
+                              disabled={isTogglingEmpId === emp.id}
+                              onClick={() => handleToggleEmployeeStatus(emp)}
+                              className="rounded-lg border border-stone-200 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-100 disabled:opacity-60"
+                            >
+                              {isTogglingEmpId === emp.id
+                                ? "Updating..."
+                                : emp.is_active
+                                ? "Disable"
+                                : "Re-enable"}
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              type="button"
+                              disabled={isDeletingEmpId === emp.id}
+                              onClick={() => setEmpToDelete(emp)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300 disabled:opacity-60"
                             >
                               <Trash2 className="h-3 w-3" strokeWidth={1.65} />
                               Delete
                             </button>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1835,13 +2261,34 @@ export function ManagementSuite({
                     </thead>
                     <tbody className="divide-y divide-stone-100">
                       {data.users.map((emp) => {
-                        const canEdit =
-                          emp.id !== user.id &&
+                        const isSelf = emp.id === user.id;
+                        const canToggle =
+                          !isSelf &&
                           (isOwner || emp.role === "staff" || emp.role === "chef");
+                        const canDelete = isOwner && !isSelf;
+                        const canResetPass = isOwner && !isSelf;
+                        const hasPendingReset = pendingResets.some(
+                          (r) =>
+                            r.user_id === emp.id ||
+                            r.email.toLowerCase() === emp.email.toLowerCase()
+                        );
+                        const isOrphaned = Boolean(data.orphaned_user_ids?.includes(emp.id));
                         return (
                           <tr key={emp.id}>
                             <td className="whitespace-nowrap px-4 py-3 font-semibold text-stone-900">
-                              {emp.full_name}
+                              <div className="flex items-center gap-2">
+                                <span>{emp.full_name}</span>
+                                {hasPendingReset && (
+                                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                    Reset Requested
+                                  </span>
+                                )}
+                                {isOrphaned && (
+                                  <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                                    Orphaned
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 font-mono text-stone-600">
                               {emp.email}
@@ -1851,54 +2298,58 @@ export function ManagementSuite({
                             </td>
                             <td className="whitespace-nowrap px-4 py-3">
                               <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${emp.is_active
-                                  ? "bg-emerald-50 text-emerald-800"
-                                  : "bg-stone-200 text-stone-600"
-                                  }`}
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                  emp.is_active
+                                    ? "bg-emerald-50 text-emerald-800"
+                                    : "bg-stone-200 text-stone-600"
+                                }`}
                               >
                                 {emp.is_active ? "Active" : "Disabled"}
                               </span>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-right">
-                              {canEdit && (
-                                <div className="inline-flex items-center justify-end gap-1.5">
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                {canResetPass && (
                                   <button
                                     type="button"
-                                    onClick={() =>
-                                      apiCall(
-                                        `/api/v1/users/${emp.id}`,
-                                        "PATCH",
-                                        { is_active: !emp.is_active },
-                                        `${emp.full_name} ${!emp.is_active ? "enabled" : "disabled"}`
-                                      )
-                                    }
-                                    className="rounded-lg border border-stone-200 px-2 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
-                                  >
-                                    {emp.is_active ? "Disable" : "Re-enable"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      if (
-                                        !window.confirm(
-                                          `Permanently delete ${emp.full_name} (${emp.email})? This cannot be undone.`
-                                        )
-                                      )
-                                        return;
-                                      await apiCall(
-                                        `/api/v1/users/${emp.id}`,
-                                        "DELETE",
-                                        undefined,
-                                        `Permanently deleted ${emp.full_name}`
-                                      );
+                                    onClick={() => {
+                                      setResetPasswordTarget(emp);
+                                      setNewPasswordVal("");
+                                      setResetPasswordErr(null);
                                     }}
-                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300"
+                                    className="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100"
+                                    title="Set new password directly"
+                                  >
+                                    <KeyRound className="h-3 w-3" strokeWidth={1.65} />
+                                    Password
+                                  </button>
+                                )}
+                                {canToggle && (
+                                  <button
+                                    type="button"
+                                    disabled={isTogglingEmpId === emp.id}
+                                    onClick={() => handleToggleEmployeeStatus(emp)}
+                                    className="rounded-lg border border-stone-200 px-2 py-1 text-[11px] font-semibold text-stone-700 hover:bg-stone-100 disabled:opacity-60"
+                                  >
+                                    {isTogglingEmpId === emp.id
+                                      ? "Updating..."
+                                      : emp.is_active
+                                      ? "Disable"
+                                      : "Re-enable"}
+                                  </button>
+                                )}
+                                {canDelete && (
+                                  <button
+                                    type="button"
+                                    disabled={isDeletingEmpId === emp.id}
+                                    onClick={() => setEmpToDelete(emp)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300 disabled:opacity-60"
                                   >
                                     <Trash2 className="h-3 w-3" strokeWidth={1.65} />
                                     Delete
                                   </button>
-                                </div>
-                              )}
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1907,6 +2358,172 @@ export function ManagementSuite({
                   </table>
                 </div>
               </div>
+
+              {/* Non-blocking Employee Deletion Modal (Owner-only) */}
+              {empToDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+                  <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
+                        <Trash2 className="h-5 w-5" strokeWidth={1.75} />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-stone-900">
+                          Delete Employee Account?
+                        </h3>
+                        <p className="text-xs text-stone-500">
+                          Permanently remove employee credentials and records
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3.5 text-xs text-stone-700">
+                      <p className="font-semibold text-stone-900">{empToDelete.full_name}</p>
+                      <p className="font-mono text-stone-500">{empToDelete.email}</p>
+                      <p className="mt-1 text-[11px] font-semibold uppercase text-[#C2410C]">
+                        Role: {empToDelete.role}
+                      </p>
+                    </div>
+
+                    <p className="mt-3 text-xs text-stone-600 leading-relaxed">
+                      This action is irreversible. The account will be permanently removed from Supabase Auth and restaurant rosters.
+                    </p>
+
+                    <div className="mt-5 flex items-center justify-end gap-2.5">
+                      <button
+                        type="button"
+                        disabled={isDeletingEmpId === empToDelete.id}
+                        onClick={() => setEmpToDelete(null)}
+                        className="rounded-xl border border-stone-200 px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isDeletingEmpId === empToDelete.id}
+                        onClick={handleConfirmDeleteEmployee}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-60"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        {isDeletingEmpId === empToDelete.id ? "Deleting..." : "Permanently Delete"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Set New Password Modal (Owner-only) */}
+              {resetPasswordTarget && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+                  <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-[#C2410C]">
+                        <KeyRound className="h-5 w-5" strokeWidth={1.75} />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-stone-900">
+                          Set Employee Password
+                        </h3>
+                        <p className="text-xs text-stone-500">
+                          Update credentials for {resetPasswordTarget.full_name}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3.5 text-xs text-stone-700">
+                      <p className="font-semibold text-stone-900">{resetPasswordTarget.full_name}</p>
+                      <p className="font-mono text-stone-500">{resetPasswordTarget.email}</p>
+                      <p className="mt-1 text-[11px] font-semibold uppercase text-[#C2410C]">
+                        Role: {resetPasswordTarget.role}
+                      </p>
+                    </div>
+
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!newPasswordVal || newPasswordVal.length < 8) {
+                          setResetPasswordErr("Password must be at least 8 characters.");
+                          return;
+                        }
+                        setIsResettingPassword(true);
+                        setResetPasswordErr(null);
+                        try {
+                          const res = await fetch(
+                            `/api/v1/users/${resetPasswordTarget.id}/reset-password`,
+                            {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ password: newPasswordVal }),
+                            }
+                          );
+                          const json = await res.json().catch(() => ({}));
+                          if (!res.ok) {
+                            setResetPasswordErr(json.error || "Failed to set password.");
+                          } else {
+                            notify(
+                              `Password updated for ${resetPasswordTarget.full_name}.`,
+                              "ok"
+                            );
+                            setResetPasswordTarget(null);
+                            setNewPasswordVal("");
+                            await loadDashboard();
+                          }
+                        } catch {
+                          setResetPasswordErr("Network error while resetting password.");
+                        } finally {
+                          setIsResettingPassword(false);
+                        }
+                      }}
+                      className="mt-4 space-y-3"
+                    >
+                      <div>
+                        <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                          New Password (8+ characters)
+                        </label>
+                        <input
+                          type="password"
+                          required
+                          minLength={8}
+                          value={newPasswordVal}
+                          onChange={(e) => {
+                            setNewPasswordVal(e.target.value);
+                            if (resetPasswordErr) setResetPasswordErr(null);
+                          }}
+                          placeholder="Enter new password directly"
+                          className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+                        />
+                      </div>
+                      {resetPasswordErr && (
+                        <p className="text-xs font-medium text-rose-600">
+                          {resetPasswordErr}
+                        </p>
+                      )}
+                      <div className="flex items-center justify-end gap-2.5 pt-2">
+                        <button
+                          type="button"
+                          disabled={isResettingPassword}
+                          onClick={() => {
+                            setResetPasswordTarget(null);
+                            setNewPasswordVal("");
+                            setResetPasswordErr(null);
+                          }}
+                          className="rounded-xl border border-stone-200 px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={isResettingPassword}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#C2410C] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#9A3412] disabled:opacity-60"
+                        >
+                          <KeyRound className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          {isResettingPassword ? "Saving..." : "Set Password"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -2119,16 +2736,17 @@ export function ManagementSuite({
               </button>
               <button
                 type="button"
+                disabled={!cancelReason.trim()}
                 onClick={async () => {
                   const ok = await apiCall(
                     `/api/v1/orders/${cancelOrderTarget.id}/cancel`,
                     "POST",
-                    { reason: cancelReason },
+                    { reason: cancelReason.trim() },
                     `Order #${cancelOrderTarget.order_number} cancelled`
                   );
                   if (ok) setCancelOrderTarget(null);
                 }}
-                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white"
+                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
               >
                 Confirm Cancellation
               </button>
@@ -2274,6 +2892,172 @@ export function ManagementSuite({
                 Save Stock Movement
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT DISH MODAL (OWNER / MANAGER) */}
+      {editingDish && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-base font-bold text-stone-900">
+                  Edit Dish: {editingDish.name}
+                </h3>
+                <p className="mt-0.5 text-xs text-stone-500">
+                  Update dish details, pricing, and photo. Changes reflect live on the digital menu.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingDish(null)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditDish} className="mt-4 space-y-3.5">
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                  Dish Name (Guarded against duplicates)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editDishName}
+                  onChange={(e) => setEditDishName(e.target.value)}
+                  placeholder="e.g. Butter Chicken"
+                  className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                  Description
+                </label>
+                <textarea
+                  rows={2}
+                  value={editDishDesc}
+                  onChange={(e) => setEditDishDesc(e.target.value)}
+                  placeholder="Short appetizing description..."
+                  className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                    Price (₹)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={editDishPrice}
+                    onChange={(e) => setEditDishPrice(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 font-mono text-xs outline-none focus:border-[#C2410C]"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                    Category
+                  </label>
+                  <select
+                    value={editDishCat}
+                    onChange={(e) => setEditDishCat(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs outline-none focus:border-[#C2410C]"
+                  >
+                    {(data?.categories ?? []).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                    Dietary
+                  </label>
+                  <select
+                    value={editDishDiet}
+                    onChange={(e) => setEditDishDiet(e.target.value as any)}
+                    className="mt-1 w-full rounded-xl border border-stone-200 bg-white px-2 py-2 text-xs outline-none focus:border-[#C2410C]"
+                  >
+                    <option value="veg">Veg</option>
+                    <option value="non_veg">Non-Veg</option>
+                    <option value="vegan">Vegan</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Photo Upload & Preview */}
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                  Dish Photo
+                </label>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2.5 rounded-xl border border-dashed border-stone-200 bg-stone-50/70 p-3">
+                  <div className="flex items-center gap-2">
+                    <img
+                      src={editDishImageUrl || editingDish.image_url || "/dishes/black-dal.jpg"}
+                      alt="Dish preview"
+                      className="h-12 w-12 rounded-xl object-cover border border-stone-200"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = "/dishes/black-dal.jpg";
+                      }}
+                    />
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 shadow-2xs hover:bg-stone-50">
+                      <Upload className="h-3.5 w-3.5 text-stone-500" strokeWidth={1.75} />
+                      {isUploadingEditImage ? "Uploading..." : "Change Photo"}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/avif"
+                        disabled={isUploadingEditImage}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void handleEditImageFileUpload(f);
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  <div className="relative min-w-[200px] flex-1">
+                    <input
+                      type="text"
+                      value={editDishImageUrl}
+                      onChange={(e) => setEditDishImageUrl(e.target.value)}
+                      placeholder="Or enter image URL (https://... or /dishes/...)"
+                      className="w-full rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-[#C2410C]"
+                    />
+                  </div>
+                  {editImageErr && (
+                    <p className="w-full text-xs font-medium text-rose-600">{editImageErr}</p>
+                  )}
+                </div>
+                <p className="mt-1 text-[11px] text-stone-400">
+                  Leave photo untouched to keep existing image.
+                </p>
+              </div>
+
+              <div className="mt-5 flex justify-end gap-2 pt-2 border-t border-stone-100">
+                <button
+                  type="button"
+                  disabled={isSavingEditDish}
+                  onClick={() => setEditingDish(null)}
+                  className="rounded-xl border border-stone-200 px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEditDish || isUploadingEditImage}
+                  className="rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-[#C2410C] disabled:opacity-50"
+                >
+                  {isSavingEditDish ? "Saving Changes..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

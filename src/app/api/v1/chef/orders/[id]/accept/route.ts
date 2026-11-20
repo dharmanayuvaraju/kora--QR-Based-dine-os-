@@ -8,7 +8,7 @@ export async function POST(
 ) {
   await ensureDbReady();
   try {
-  const auth = await requireRole(["chef", "owner"]);
+  const auth = await requireRole(["chef", "staff", "manager", "owner"]);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }

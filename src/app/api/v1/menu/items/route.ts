@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { createMenuItem, ensureDbReady, flushDb } from "@/lib/db/store";
+import { createMenuItem, ensureDbReady, flushDb, getDb } from "@/lib/db/store";
 
 const Schema = z.object({
   category_id: z.string().min(1),
@@ -45,6 +45,17 @@ export async function POST(req: NextRequest) {
   }
   try {
     const body = Schema.parse(await req.json());
+    const db = getDb();
+    const cleanName = body.name.trim();
+    const isDuplicate = db.menu_items.some(
+      (m) => !m.deleted_at && m.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (isDuplicate) {
+      return NextResponse.json(
+        { error: `A dish named "${cleanName}" already exists on the menu.` },
+        { status: 409 }
+      );
+    }
     const item = createMenuItem(body, auth.session);
     return NextResponse.json({ item }, { status: 201 });
   } catch (err) {

@@ -101,6 +101,104 @@ function healLegacyState(state: DatabaseState): boolean {
   if (reconcileStaleProcessingPayments(state)) {
     changed = true;
   }
+  for (const u of state.users) {
+    if (u.role === "owner" && (u.full_name === "Arjun Mehta" || u.full_name === "Ajay" || u.email.toLowerCase() === "owner@kora.in")) {
+      if (u.full_name !== "Yuvaraj") {
+        u.full_name = "Yuvaraj";
+        changed = true;
+      }
+    }
+  }
+  for (const exp of state.expenses) {
+    if (exp.recorded_by === "Arjun Mehta" || exp.recorded_by === "Ajay") {
+      exp.recorded_by = "Yuvaraj";
+      changed = true;
+    }
+  }
+
+  // Migrate location to Hyderabad
+  if (
+    state.settings.address.includes("Bengaluru") ||
+    state.settings.address.includes("Indiranagar") ||
+    state.settings.address.includes("560038")
+  ) {
+    state.settings.address = "Road No. 36, Jubilee Hills, Hyderabad 500033";
+    state.settings.gstin = "36AABCK4821M1Z5";
+    changed = true;
+  }
+
+  // Ensure Soft Drinks category exists
+  let softDrinksCat = state.menu_categories.find(
+    (c) => c.name.toLowerCase() === "soft drinks" || c.id === "33333333-3333-4333-8333-333333333307"
+  );
+  if (!softDrinksCat) {
+    softDrinksCat = {
+      id: "33333333-3333-4333-8333-333333333307",
+      name: "Soft Drinks",
+      description: "Chilled sodas, aerated colas & packaged natural mineral water",
+      sort_order: 7,
+      is_active: true,
+    };
+    state.menu_categories.push(softDrinksCat);
+    changed = true;
+  }
+
+  // Ensure Thums Up, Pepsi, Water Bottle exist
+  const requiredDrinks = [
+    {
+      name: "Thums Up",
+      description: "Charged strong carbonated cola with an iconic punch of spicy fizz, served chilled (330ml).",
+      price: 45,
+      dietary: "veg" as const,
+      spice_level: 0 as const,
+      prep_minutes: 2,
+      image_url: "/dishes/kokum-fizz.jpg",
+      is_bestseller: true,
+      is_available: true,
+      stock_count: 60,
+    },
+    {
+      name: "Pepsi",
+      description: "Classic crisp refreshing cola with smooth bubbles, served chilled (330ml).",
+      price: 45,
+      dietary: "veg" as const,
+      spice_level: 0 as const,
+      prep_minutes: 2,
+      image_url: "/dishes/filter-coffee-tonic.jpg",
+      is_bestseller: false,
+      is_available: true,
+      stock_count: 60,
+    },
+    {
+      name: "Water Bottle",
+      description: "Packaged natural mineral water bottle, sealed and chilled (1000ml).",
+      price: 25,
+      dietary: "veg" as const,
+      spice_level: 0 as const,
+      prep_minutes: 1,
+      image_url: "/dishes/kokum-fizz.jpg",
+      is_bestseller: false,
+      is_available: true,
+      stock_count: 100,
+    },
+  ];
+
+  for (const drink of requiredDrinks) {
+    const exists = state.menu_items.some(
+      (m) => !m.deleted_at && m.name.toLowerCase() === drink.name.toLowerCase()
+    );
+    if (!exists) {
+      state.menu_items.push({
+        id: crypto.randomUUID(),
+        category_id: softDrinksCat.id,
+        ...drink,
+        deleted_at: null,
+        variants: [],
+        addons: [],
+      });
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -208,6 +306,32 @@ export async function ensureDbReady(): Promise<DatabaseState> {
   if (res.data && res.data.payload && Array.isArray((res.data.payload as DatabaseState).restaurant_tables)) {
     const loaded = res.data.payload as DatabaseState;
     const healed = healLegacyState(loaded);
+
+    // IDEMPOTENT SYNC: Merge public.users without deleting or resetting existing records
+    try {
+      const { data: dbUsers } = await supabase.from("users").select("*");
+      if (dbUsers && dbUsers.length > 0) {
+        const existingEmails = new Set(loaded.users.map((u) => u.email.toLowerCase()));
+        for (const u of dbUsers) {
+          if (!existingEmails.has(u.email.toLowerCase())) {
+            loaded.users.push({
+              id: u.id,
+              full_name: u.full_name,
+              email: u.email,
+              role: u.role,
+              phone: u.phone,
+              is_active: u.is_active,
+              created_at: u.created_at,
+            });
+            existingEmails.add(u.email.toLowerCase());
+          }
+        }
+      }
+    } catch {
+      // non-blocking
+    }
+
+    void ensureCoreAuthUsers();
     globalThis.__koraDbState = loaded;
     globalThis.__koraDbVersion = Number(res.data.version ?? 1);
     globalThis.__koraDbDirty = healed;
@@ -228,7 +352,81 @@ export async function ensureDbReady(): Promise<DatabaseState> {
   if (seedErr) {
     console.error("[KORA Supabase] Initial seed persist error:", seedErr.message);
   }
+  void ensureCoreAuthUsers();
   return seeded;
+}
+
+let hasEnsuredAuthUsers = false;
+
+export async function ensureCoreAuthUsers(): Promise<void> {
+  if (hasEnsuredAuthUsers) return;
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) return;
+
+  const coreAccounts: Array<{
+    email: string;
+    password: string;
+    full_name: string;
+    role: UserRole;
+  }> = [
+    { email: "owner@kora.in", password: "Owner#kora", full_name: "Yuvaraj", role: "owner" },
+    { email: "manager@kora.in", password: "KoraManager#2026", full_name: "Priya Nair", role: "manager" },
+    { email: "chef@kora.in", password: "KoraChef#2026", full_name: "Chef Vikramaditya Rao", role: "chef" },
+    { email: "staff@kora.in", password: "KoraStaff#2026", full_name: "Rohan Das", role: "staff" },
+  ];
+
+  try {
+    const { data: existingList } = await supabase.auth.admin.listUsers({ perPage: 100 });
+    const existingEmails = new Set(
+      (existingList?.users ?? []).map((u) => u.email?.toLowerCase()).filter(Boolean)
+    );
+
+    for (const acc of coreAccounts) {
+      // IDEMPOTENT GUARD: If account already exists in Supabase Auth, SKIP UNTOUCHED!
+      // Never delete, disable, or reset password of existing account.
+      if (existingEmails.has(acc.email.toLowerCase())) {
+        if (acc.role === "owner") {
+          const ownerAuth = existingList?.users.find((u) => u.email?.toLowerCase() === "owner@kora.in");
+          if (ownerAuth && ownerAuth.user_metadata?.full_name !== acc.full_name) {
+            try {
+              await supabase.auth.admin.updateUserById(ownerAuth.id, {
+                user_metadata: { full_name: acc.full_name },
+              });
+              await supabase.from("users").update({
+                full_name: acc.full_name,
+              }).eq("id", ownerAuth.id);
+            } catch {
+              // ignore
+            }
+          }
+        }
+        continue;
+      }
+
+      const { data: created, error } = await supabase.auth.admin.createUser({
+        email: acc.email,
+        password: acc.password,
+        email_confirm: true,
+        app_metadata: { role: acc.role },
+        user_metadata: { full_name: acc.full_name },
+      });
+
+      if (!error && created?.user) {
+        await supabase.from("users").upsert({
+          id: created.user.id,
+          full_name: acc.full_name,
+          email: acc.email,
+          role: acc.role,
+          is_active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+    hasEnsuredAuthUsers = true;
+  } catch (err) {
+    console.warn("[KORA Auth] Seed check completed with notice:", err);
+  }
 }
 
 export function getDb(): DatabaseState {
@@ -280,7 +478,23 @@ export async function flushDb(): Promise<void> {
 }
 
 export function resetDemoDatabase(): DatabaseState {
+  const currentUsers = globalThis.__koraDbState?.users ?? [];
   const seeded = createSeedState();
+
+  // CRITICAL SEED SAFETY: Preserve all existing employee accounts & active statuses untouched
+  if (currentUsers.length > 0) {
+    const userMap = new Map<string, User>();
+    for (const u of currentUsers) {
+      userMap.set(u.email.toLowerCase(), u);
+    }
+    for (const s of seeded.users) {
+      if (!userMap.has(s.email.toLowerCase())) {
+        userMap.set(s.email.toLowerCase(), s);
+      }
+    }
+    seeded.users = Array.from(userMap.values());
+  }
+
   globalThis.__koraDbState = seeded;
   commitDb();
   publishRealtimeEvent({
@@ -391,7 +605,8 @@ export function resolveTableByQrToken(qrToken: string): {
       closed_by: null,
     };
     db.table_sessions.push(session);
-    table.status = "occupied";
+  table.status = "occupied";
+  table.qr_token = crypto.randomUUID();
     createdNewSession = true;
     commitDb();
 
@@ -440,6 +655,7 @@ export function openTableSession(
   };
   db.table_sessions.push(session);
   table.status = "occupied";
+  table.qr_token = crypto.randomUUID();
 
   addAudit(
     db,
@@ -501,6 +717,8 @@ export function closeTableSession(
 
   if (table && table.is_active) {
     table.status = "available";
+    table.qr_token = crypto.randomUUID();
+   table.qr_token = crypto.randomUUID();
   }
 
   addAudit(
@@ -712,8 +930,8 @@ export function createCustomerOrder(
 
 export function acceptOrderByChef(orderId: string, actor: SessionPayload): Order {
   const db = getDb();
-  if (actor.role !== "chef" && actor.role !== "owner") {
-    throw new Error("Only the Chef (or Owner override) can accept kitchen orders.");
+  if (!["chef", "owner", "staff", "manager"].includes(actor.role)) {
+    throw new Error("Only the Chef, Staff, Manager, or Owner can accept kitchen orders.");
   }
   const order = db.orders.find((o) => o.id === orderId);
   if (!order) throw new Error("Order not found");
@@ -807,8 +1025,8 @@ export function rejectOrderByChef(
   actor: SessionPayload
 ): Order {
   const db = getDb();
-  if (actor.role !== "chef" && actor.role !== "owner") {
-    throw new Error("Only the Chef (or Owner override) can reject kitchen orders.");
+  if (!["chef", "owner", "staff", "manager"].includes(actor.role)) {
+    throw new Error("Only the Chef, Staff, Manager, or Owner can reject kitchen orders.");
   }
   const cleanReason = reason.trim();
   if (!cleanReason) throw new Error("A rejection reason is mandatory.");
@@ -838,7 +1056,7 @@ export function rejectOrderByChef(
   addAudit(
     db,
     { id: actor.userId, name: actor.fullName, role: actor.role },
-    "ORDER_REJECTED_BY_CHEF",
+    "ORDER_REJECTED",
     "order",
     order.id,
     { order_number: order.order_number, table_number: order.table_number, reason: cleanReason }
@@ -1735,6 +1953,13 @@ export function createMenuItem(
   if (!["owner", "manager"].includes(actor.role)) {
     throw new Error("Only Owner or Manager can create menu items.");
   }
+  const cleanName = data.name.trim();
+  const existing = db.menu_items.find(
+    (m) => !m.deleted_at && m.name.trim().toLowerCase() === cleanName.toLowerCase()
+  );
+  if (existing) {
+    throw new Error(`A dish named "${cleanName}" already exists on the menu.`);
+  }
   const id = crypto.randomUUID();
   const initialStock =
     typeof data.stock_count === "number"
@@ -1790,6 +2015,18 @@ export function updateMenuItem(
   }
   const item = db.menu_items.find((m) => m.id === itemId && !m.deleted_at);
   if (!item) throw new Error("Menu item not found");
+
+  if (patch.name !== undefined) {
+    const cleanName = patch.name.trim();
+    if (!cleanName) throw new Error("Dish name cannot be empty.");
+    const existing = db.menu_items.find(
+      (m) => m.id !== itemId && !m.deleted_at && m.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (existing) {
+      throw new Error(`A dish named "${cleanName}" already exists on the menu.`);
+    }
+    patch.name = cleanName;
+  }
 
   // Only owner can change prices if strict control desired; both allowed per matrix
   Object.assign(item, patch);
@@ -2017,11 +2254,8 @@ export function deleteEmployee(userId: string, actor: SessionPayload): User {
   if (index === -1) throw new Error("Employee not found");
   const target = db.users[index];
 
-  if (actor.role === "manager" && !["staff", "chef"].includes(target.role)) {
-    throw new Error("Managers cannot delete Owner or Manager accounts.");
-  }
-  if (actor.role !== "owner" && actor.role !== "manager") {
-    throw new Error("Unauthorized");
+  if (actor.role !== "owner") {
+    throw new Error("Only the restaurant owner can permanently delete employee accounts.");
   }
   if (target.id === actor.userId) {
     throw new Error("You cannot delete your own account.");
@@ -2156,4 +2390,94 @@ export function updateRestaurantSettings(
   );
   commitDb();
   return db.settings;
+}
+
+
+export function cancelOrderItemByCustomer(
+  orderId: string,
+  itemId: string,
+  reason: string
+): { order: Order; item: OrderItem; bill: SessionBillSummary } {
+  const db = getDb();
+  const cleanReason = reason.trim();
+  if (!cleanReason) throw new Error("A cancellation reason is mandatory.");
+
+  const order = db.orders.find((o) => o.id === orderId);
+  if (!order) throw new Error("Order not found");
+
+  const item = order.items.find((i) => i.id === itemId);
+  if (!item) throw new Error("Order item not found");
+
+  if (item.status === "cancelled") {
+    throw new Error("This item is already cancelled.");
+  }
+
+  // Items already Accepted or Cooking can no longer be cancelled by the customer
+  if (item.status !== "pending_approval") {
+    throw new Error(
+      `Item "${item.item_name_snapshot}" cannot be cancelled because preparation has already started (${item.status}).`
+    );
+  }
+
+  const nowIso = new Date().toISOString();
+  const prevStatus = item.status;
+  item.status = "cancelled";
+  item.cancellation_reason = cleanReason;
+  item.cancelled_at = nowIso;
+
+  // Invalidate any matching kitchen ticket
+  const ticket = db.kitchen_tickets.find((k) => k.order_item_id === itemId);
+  if (ticket) {
+    ticket.status = "cancelled";
+    ticket.updated_at = nowIso;
+  }
+
+  // If ALL active items in this order are now cancelled or rejected, cancel entire order
+  const activeItems = order.items.filter(
+    (i) => i.status !== "cancelled" && i.status !== "rejected"
+  );
+  if (activeItems.length === 0) {
+    order.status = "cancelled";
+    order.cancellation_reason = cleanReason;
+    order.updated_at = nowIso;
+  }
+
+  logOrderStatus(
+    db,
+    order.id,
+    item.id,
+    prevStatus,
+    "cancelled",
+    { id: null, role: "customer" },
+    cleanReason
+  );
+
+  addAudit(
+    db,
+    { id: null, name: `Customer (Table ${order.table_number})`, role: "customer" },
+    "ORDER_ITEM_CANCELLED",
+    "order_item",
+    item.id,
+    {
+      order_id: order.id,
+      order_number: order.order_number,
+      table_number: order.table_number,
+      item_name: item.item_name_snapshot,
+      reason: cleanReason,
+    }
+  );
+
+  commitDb();
+
+  publishRealtimeEvent({
+    type: "order.cancelled",
+    channel: "restaurant:orders",
+    session_id: order.session_id,
+    table_number: order.table_number,
+    order_number: order.order_number,
+    message: `${item.item_name_snapshot} cancelled by customer at Table ${order.table_number}`,
+  });
+
+  const bill = getSessionBillSummary(order.session_id);
+  return { order, item, bill };
 }

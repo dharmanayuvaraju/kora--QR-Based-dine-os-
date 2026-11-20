@@ -11,6 +11,7 @@ import {
   History,
   Receipt,
   Smartphone,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { useRealtime } from "@/hooks/useRealtime";
 import { playChime } from "@/lib/sound";
 import { formatCurrency, formatElapsed, formatTimeShort } from "@/lib/utils";
 import type {
+  Order,
   OrderItem,
   PaymentChannel,
   RestaurantTable,
@@ -83,6 +85,93 @@ function StaffWorkspace({
   const [collectAmount, setCollectAmount] = useState("");
   const [collectChannel, setCollectChannel] = useState<PaymentChannel>("cash");
   const [collecting, setCollecting] = useState(false);
+
+  // Staff Table Session Controls (Open / Close)
+  const openTableSessionHandler = async (tableId: string) => {
+    setBusyId(`open-${tableId}`);
+    try {
+      const res = await fetch(`/api/v1/tables/${tableId}/session/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guest_count: 2 }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        setAlertText(err.error ?? "Failed to open table session");
+      } else {
+        await loadOverview();
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const closeTableSessionHandler = async (sessionId: string) => {
+    setBusyId(`close-${sessionId}`);
+    try {
+      const res = await fetch(`/api/v1/sessions/${sessionId}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true, reason: "Table cleared by floor staff" }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        setAlertText(err.error ?? "Failed to close table session");
+      } else {
+        await loadOverview();
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Staff Order Approval & Rejection
+  const approveStaffOrder = async (orderId: string) => {
+    setBusyId(`appr-${orderId}`);
+    try {
+      const res = await fetch(`/api/v1/chef/orders/${orderId}/accept`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        setAlertText(err.error ?? "Failed to approve order");
+      } else {
+        await loadOverview();
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const [staffRejectTarget, setStaffRejectTarget] = useState<Order | null>(null);
+  const [staffRejectReasonInput, setStaffRejectReasonInput] = useState("");
+
+  const confirmStaffReject = async () => {
+    if (!staffRejectTarget || !staffRejectReasonInput.trim()) return;
+    setBusyId(`rej-${staffRejectTarget.id}`);
+    try {
+      const res = await fetch(`/api/v1/chef/orders/${staffRejectTarget.id}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: staffRejectReasonInput.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        setAlertText(err.error ?? "Failed to reject order");
+      } else {
+        setStaffRejectTarget(null);
+        setStaffRejectReasonInput("");
+        await loadOverview();
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Staff Order Cancellation Modal
+  const [cancelTarget, setCancelTarget] = useState<Order | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [isCancelling, setIsCancelling] = useState(false);
 
   const loadOverview = useCallback(async () => {
     const res = await fetch(`/api/v1/staff/overview?t=${Date.now()}`, { cache: "no-store" });
@@ -157,6 +246,32 @@ function StaffWorkspace({
       }
     } finally {
       setCollecting(false);
+    }
+  };
+
+  const confirmCancelOrder = async () => {
+    if (!cancelTarget) return;
+    setIsCancelling(true);
+    try {
+      const res = await fetch(`/api/v1/orders/${cancelTarget.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: cancelReason.trim() || "Cancelled by floor staff",
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAlertText(json.error ?? "Failed to cancel order");
+      } else {
+        setAlertText(`Order #${cancelTarget.order_number} cancelled.`);
+        setCancelTarget(null);
+        await loadOverview();
+      }
+    } catch {
+      setAlertText("Network error while cancelling order");
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -462,9 +577,31 @@ function StaffWorkspace({
                             {readyCount} item{readyCount === 1 ? "" : "s"} ready at kitchen pass!
                           </p>
                         )}
-                        <div className="flex flex-wrap gap-1 pt-1">
+                        <div className="space-y-1 pt-1">
                           {t.bill.orders.map((o) => (
-                            <StatusBadge key={o.id} status={o.status} compact />
+                            <div
+                              key={o.id}
+                              className="flex items-center justify-between rounded-lg bg-stone-50 px-2 py-1"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-[11px] font-semibold text-stone-600">
+                                  #{o.order_number}
+                                </span>
+                                <StatusBadge status={o.status} compact />
+                              </div>
+                              {!["completed", "cancelled", "rejected"].includes(o.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCancelTarget(o);
+                                    setCancelReason("");
+                                  }}
+                                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -608,6 +745,72 @@ function StaffWorkspace({
             >
               {collecting ? "Recording & Auditing..." : "Confirm Payment Received"}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* STAFF ORDER CANCELLATION MODAL */}
+      {cancelTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-rose-600">
+                  Cancel Order
+                </p>
+                <h3 className="mt-1 font-serif text-lg font-semibold text-stone-900">
+                  Order #{cancelTarget.order_number} · Table {cancelTarget.table_number}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                className="rounded-lg p-1 text-stone-400 hover:text-stone-700"
+              >
+                <X className="h-5 w-5" strokeWidth={1.65} />
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs text-stone-600">
+              Are you sure you want to cancel this order? This will cancel all {cancelTarget.items.length} item(s) and notify the kitchen.
+            </p>
+
+            <div className="mt-3">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                Reason for cancellation (optional)
+              </label>
+              <input
+                type="text"
+                required
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Reason is required (e.g. Guest changed mind, duplicate order)"
+                className="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-rose-500"
+              />
+              <p className="mt-1 text-[11px] text-stone-500">
+                Staff cancellation requires a reason and writes to the service audit log.
+              </p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={isCancelling}
+                onClick={() => setCancelTarget(null)}
+                className="rounded-xl border border-stone-200 px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50"
+              >
+                Keep Order
+              </button>
+              <button
+                type="button"
+                disabled={isCancelling || !cancelReason.trim()}
+                onClick={confirmCancelOrder}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-60"
+              >
+                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                {isCancelling ? "Cancelling..." : "Confirm Cancellation"}
+              </button>
+            </div>
           </div>
         </div>
       )}

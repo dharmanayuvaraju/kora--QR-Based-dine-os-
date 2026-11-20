@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth";
-import { isSupabaseServerPersistenceConfigured } from "@/lib/supabase";
+import { isSupabaseServerPersistenceConfigured, getSupabaseAdminClient } from "@/lib/supabase";
 import { getDb, getSessionBillSummary, recordExpense, ensureDbReady, flushDb } from "@/lib/db/store";
 
 export const dynamic = "force-dynamic";
@@ -86,6 +86,22 @@ export async function GET() {
     };
   });
 
+  let orphanedUserIds: string[] = [];
+  const supabaseAdmin = getSupabaseAdminClient();
+  if (supabaseAdmin) {
+    try {
+      const { data: authList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 100 });
+      if (authList?.users) {
+        const authEmails = new Set(authList.users.map((u) => u.email?.toLowerCase()).filter(Boolean));
+        orphanedUserIds = db.users
+          .filter((u) => u.role !== "owner" && !authEmails.has(u.email.toLowerCase()))
+          .map((u) => u.id);
+      }
+    } catch {
+      // non-blocking
+    }
+  }
+
   return NextResponse.json({
     role: auth.session.role,
     settings: db.settings,
@@ -99,10 +115,10 @@ export async function GET() {
       total_expenses: isOwner ? totalExpenses : null,
       net_profit_est: isOwner ? netCollected - totalExpenses : null,
       avg_order_value: avgOrderValue,
-      total_orders: db.orders.length,
+      total_orders: validOrders.length,
       active_orders_count: activeOrders.length,
       pending_approval_count: db.orders.filter((o) => o.status === "pending_approval").length,
-      rejected_orders_count: db.orders.filter((o) => o.status === "rejected").length,
+      rejected_orders_count: db.orders.filter((o) => o.status === "rejected" || o.status === "cancelled").length,
       occupied_tables_count: tables.filter((t) => Boolean(t.active_session)).length,
       total_tables_count: tables.length,
       low_stock_count: db.inventory_items.filter(
@@ -123,6 +139,8 @@ export async function GET() {
     categories: db.menu_categories,
     menu_items: db.menu_items.filter((m) => !m.deleted_at),
     users: db.users,
+    orphaned_user_ids: orphanedUserIds,
+    password_reset_requests: db.password_reset_requests || [],
     inventory_items: db.inventory_items,
     inventory_movements: db.inventory_movements.slice(0, 30),
     low_stock_flags: db.low_stock_flags,

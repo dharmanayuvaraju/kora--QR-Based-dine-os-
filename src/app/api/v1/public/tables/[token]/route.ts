@@ -55,30 +55,15 @@ export async function GET(
       );
     }
 
-    // Priority 2 & 3: Preserve recently paid/closed session so reloading or reopening
-    // the table link keeps completed orders and the paid GST invoice visible
-    if (!forceNew) {
-      let closedToKeep = preserveSessionId
-        ? db.table_sessions.find(
-            (s) =>
-              s.id === preserveSessionId &&
-              s.table_id === table.id &&
-              s.status === "closed"
-          )
-        : undefined;
-
-      if (!closedToKeep) {
-        const now = Date.now();
-        closedToKeep = db.table_sessions
-          .filter(
-            (s) =>
-              s.table_id === table.id &&
-              s.status === "closed" &&
-              s.closed_at &&
-              now - new Date(s.closed_at).getTime() <= RECENT_CLOSED_WINDOW_MS
-          )
-          .sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? ""))[0];
-      }
+    // Priority 2: Preserve recently paid/closed session ONLY if user already had that session_id
+    // (e.g. reload or returning from payment gateway to view paid GST invoice)
+    if (!forceNew && preserveSessionId) {
+      const closedToKeep = db.table_sessions.find(
+        (s) =>
+          s.id === preserveSessionId &&
+          s.table_id === table.id &&
+          s.status === "closed"
+      );
 
       if (closedToKeep) {
         const bill = getSessionBillSummary(closedToKeep.id);
@@ -97,23 +82,16 @@ export async function GET(
       }
     }
 
-    // Priority 4: Start a new dining session for this table
-    const resolved = resolveTableByQrToken(token);
-    if (!resolved) {
-      return NextResponse.json(
-        { error: "Invalid or deactivated table QR code." },
-        { status: 404 }
-      );
-    }
-
-    const bill = getSessionBillSummary(resolved.session.id);
+    // Priority 4: Table session is closed or awaiting staff activation
     return NextResponse.json(
       {
-        table: resolved.table,
-        session: resolved.session,
-        created_new_session: resolved.createdNewSession,
-        bill,
+        table,
+        session: null,
+        is_open: false,
+        created_new_session: false,
+        bill: null,
         settings: db.settings,
+        message: `Table ${table.table_number} is not currently open. Please ask our staff to seat you and open this table.`,
       },
       { headers: { "Cache-Control": "no-store, max-age=0" } }
     );

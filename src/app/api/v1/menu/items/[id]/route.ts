@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
-import { softDeleteMenuItem, updateMenuItem, ensureDbReady, flushDb } from "@/lib/db/store";
+import { softDeleteMenuItem, updateMenuItem, ensureDbReady, flushDb, getDb } from "@/lib/db/store";
 
 export async function PATCH(
   req: NextRequest,
@@ -15,13 +15,25 @@ export async function PATCH(
   try {
     const { id } = await context.params;
     const patch = await req.json();
+    if (patch.name) {
+      const db = getDb();
+      const cleanName = String(patch.name).trim();
+      const isDup = db.menu_items.some(
+        (m) => m.id !== id && !m.deleted_at && m.name.trim().toLowerCase() === cleanName.toLowerCase()
+      );
+      if (isDup) {
+        return NextResponse.json(
+          { error: `A dish named "${cleanName}" already exists on the menu.` },
+          { status: 409 }
+        );
+      }
+    }
     const item = updateMenuItem(id, patch, auth.session);
     return NextResponse.json({ item });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Could not update item" },
-      { status: 400 }
-    );
+    const msg = err instanceof Error ? err.message : "Could not update item";
+    const status = msg.includes("already exists") ? 409 : 400;
+    return NextResponse.json({ error: msg }, { status });
   }
   } finally {
     await flushDb();

@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
+  Check,
   CheckCircle2,
   Clock,
   Flame,
@@ -243,6 +244,16 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
   const [processingPay, setProcessingPay] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [celebratePay, setCelebratePay] = useState(false);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [cancelTargetOrder, setCancelTargetOrder] = useState<Order | null>(null);
+  const [cancelTargetItem, setCancelTargetItem] = useState<{
+    orderId: string;
+    itemId: string;
+    orderNumber: number;
+    name: string;
+  } | null>(null);
+  const [cancellingItemId, setCancellingItemId] = useState<string | null>(null);
+  const [customerCancelReason, setCustomerCancelReason] = useState("Placed by mistake");
 
   const trayButtonRef = useRef<HTMLButtonElement | null>(null);
   const categoryBarRef = useRef<HTMLDivElement | null>(null);
@@ -645,6 +656,67 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
     }
   };
 
+  const confirmCustomerCancelItem = async () => {
+    if (!cancelTargetItem || !customerCancelReason.trim()) return;
+    setCancellingItemId(cancelTargetItem.itemId);
+    try {
+      const res = await fetch(
+        `/api/v1/orders/${cancelTargetItem.orderId}/items/${cancelTargetItem.itemId}/cancel`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: customerCancelReason.trim() }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data.error || "Could not cancel item.", "err");
+      } else {
+        showToast(`"${cancelTargetItem.name}" cancelled successfully.`, "ok");
+        setCancelTargetItem(null);
+        if (session?.id) {
+          await refreshSessionBill(session.id);
+        } else {
+          await loadTableAndMenu();
+        }
+      }
+    } catch {
+      showToast("Network error while cancelling item.", "err");
+    } finally {
+      setCancellingItemId(null);
+    }
+  };
+
+  const confirmCustomerCancelOrder = async () => {
+    if (!cancelTargetOrder) return;
+    const orderId = cancelTargetOrder.id;
+    const reason = customerCancelReason.trim() || "Placed by mistake";
+    setCancellingOrderId(orderId);
+    try {
+      const res = await fetch(`/api/v1/orders/${orderId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: session?.id, reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data.error || "Could not cancel order.", "err");
+      } else {
+        showToast("Order cancelled successfully.", "ok");
+        setCancelTargetOrder(null);
+        if (session?.id) {
+          await refreshSessionBill(session.id);
+        } else {
+          await loadTableAndMenu();
+        }
+      }
+    } catch {
+      showToast("Network error while cancelling order.", "err");
+    } finally {
+      setCancellingOrderId(null);
+    }
+  };
+
   const openOnlineCheckout = () => {
     if (!bill) return;
     setPayAmountInput(String(bill.balance_due));
@@ -920,6 +992,31 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
       )}
 
       <main className="mx-auto max-w-2xl px-4 pt-4">
+        {!session && (
+          <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-amber-100 p-2 text-amber-800">
+                <Store className="h-5 w-5" strokeWidth={1.75} />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-amber-950">
+                  Table Session Closed / Not Seated
+                </p>
+                <p className="mt-1 text-xs text-amber-900 leading-relaxed">
+                  Please ask our floor staff to seat you and open <strong>{table.table_number}</strong>. Orders can only be placed while your table session is active.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => loadTableAndMenu(false)}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 shadow-2xs hover:bg-amber-100"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  Check Table Status
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {sessionClosed && (
           <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="flex items-start justify-between gap-3">
@@ -1152,7 +1249,7 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                     {order.status === "rejected" && (
                       <div className="my-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
                         <p className="font-semibold">
-                          Kitchen could not accept this order: {order.rejection_reason}
+                          Order could not be accepted, please check with our staff. Reason: {order.rejection_reason}
                         </p>
                         <p className="mt-0.5 text-rose-700">
                           You have not been charged. Edit items and resubmit anytime.
@@ -1206,6 +1303,34 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
                         </div>
                       ))}
                     </div>
+
+                    {/* Cancellation Banner */}
+                    {order.status === "cancelled" && (
+                      <div className="mt-3 rounded-xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-700">
+                        <p className="font-semibold text-stone-900">Order Cancelled</p>
+                        <p className="mt-0.5 text-stone-500">
+                          {order.cancellation_reason || "This order was cancelled and has been excluded from your bill."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Customer Cancel Option (Only while Placed or Accepted - not once cooking starts) */}
+                    {(order.status === "pending_approval" || order.status === "accepted") && !sessionClosed && (
+                      <div className="mt-3 flex items-center justify-between border-t border-stone-100 pt-3">
+                        <p className="text-[11px] text-stone-500">Placed by mistake?</p>
+                        <button
+                          type="button"
+                          disabled={cancellingOrderId === order.id}
+                          onClick={() => {
+                            setCancelTargetOrder(order);
+                            setCustomerCancelReason("Placed by mistake");
+                          }}
+                          className="min-h-[38px] rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 hover:border-rose-300 disabled:opacity-60"
+                        >
+                          {cancellingOrderId === order.id ? "Cancelling..." : "Cancel Order"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1790,6 +1915,143 @@ export function CustomerDiningApp({ qrToken }: { qrToken: string }) {
           onClose={() => setPayModalOpen(false)}
           onConfirm={executeOnlinePayment}
         />
+      )}
+
+      {/* Customer Cancel Order Modal with Mandatory Reason */}
+      {cancelTargetOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-stone-900">
+              Cancel Order #{cancelTargetOrder.order_number}
+            </h3>
+            <p className="mt-1 text-xs text-stone-500">
+              This order will be removed from the kitchen line and excluded from your bill.
+            </p>
+
+            <div className="mt-4 space-y-1.5">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                Reason for cancellation
+              </label>
+              {[
+                "Placed by mistake",
+                "Want to change dishes",
+                "Ordered wrong quantity",
+                "Other reason",
+              ].map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setCustomerCancelReason(r === "Other reason" ? "" : r)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
+                    customerCancelReason === r || (r === "Other reason" && !["Placed by mistake", "Want to change dishes", "Ordered wrong quantity"].includes(customerCancelReason))
+                      ? "border-[#C2410C] bg-orange-50/50 text-[#C2410C]"
+                      : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                  }`}
+                >
+                  <span>{r}</span>
+                  {(customerCancelReason === r || (r === "Other reason" && !["Placed by mistake", "Want to change dishes", "Ordered wrong quantity"].includes(customerCancelReason))) && (
+                    <Check className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  )}
+                </button>
+              ))}
+              <input
+                type="text"
+                value={customerCancelReason}
+                onChange={(e) => setCustomerCancelReason(e.target.value)}
+                placeholder="Or type specific reason (mandatory)..."
+                className="mt-2 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+              />
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                disabled={Boolean(cancellingOrderId)}
+                onClick={() => setCancelTargetOrder(null)}
+                className="flex-1 rounded-xl border border-stone-200 py-2.5 text-xs font-semibold text-stone-700 hover:bg-stone-50"
+              >
+                Keep Order
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(cancellingOrderId) || !customerCancelReason.trim()}
+                onClick={confirmCustomerCancelOrder}
+                className="flex-1 rounded-xl bg-rose-600 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50"
+              >
+                {cancellingOrderId ? "Cancelling..." : "Cancel Order"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+            {/* Customer Cancel Individual Item Modal with Mandatory Reason */}
+      {cancelTargetItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-stone-900">
+              Cancel Item
+            </h3>
+            <p className="mt-1 text-xs text-stone-600">
+              Cancel <strong>{cancelTargetItem.name}</strong> from Order #{cancelTargetItem.orderNumber}.
+              This item will be excluded from your bill and removed from the kitchen.
+            </p>
+
+            <div className="mt-4 space-y-1.5">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-stone-500">
+                Reason for cancellation (Mandatory)
+              </label>
+              {[
+                "Placed by mistake",
+                "Want to change dishes",
+                "Ordered wrong quantity",
+                "Other reason",
+              ].map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setCustomerCancelReason(r === "Other reason" ? "" : r)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
+                    customerCancelReason === r || (r === "Other reason" && !["Placed by mistake", "Want to change dishes", "Ordered wrong quantity"].includes(customerCancelReason))
+                      ? "border-[#C2410C] bg-orange-50/50 text-[#C2410C]"
+                      : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                  }`}
+                >
+                  <span>{r}</span>
+                  {(customerCancelReason === r || (r === "Other reason" && !["Placed by mistake", "Want to change dishes", "Ordered wrong quantity"].includes(customerCancelReason))) && (
+                    <Check className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  )}
+                </button>
+              ))}
+              <input
+                type="text"
+                value={customerCancelReason}
+                onChange={(e) => setCustomerCancelReason(e.target.value)}
+                placeholder="Or type specific reason (mandatory)..."
+                className="mt-2 w-full rounded-xl border border-stone-200 px-3 py-2 text-xs outline-none focus:border-[#C2410C]"
+              />
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                disabled={Boolean(cancellingItemId)}
+                onClick={() => setCancelTargetItem(null)}
+                className="flex-1 rounded-xl border border-stone-200 py-2.5 text-xs font-semibold text-stone-700 hover:bg-stone-50"
+              >
+                Keep Item
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(cancellingItemId) || !customerCancelReason.trim()}
+                onClick={confirmCustomerCancelItem}
+                className="flex-1 rounded-xl bg-rose-600 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50"
+              >
+                {cancellingItemId ? "Cancelling..." : "Cancel Item"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Lazy-Loaded Paid GST Receipt Modal (with Animated Checkmark & Confetti) */}

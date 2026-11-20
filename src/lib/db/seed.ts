@@ -26,6 +26,7 @@ export function createSeedState(): DatabaseState {
   const cCurries = "33333333-3333-4333-8333-333333333304";
   const cBreads = "33333333-3333-4333-8333-333333333305";
   const cDrinks = "33333333-3333-4333-8333-333333333306";
+  const cSoftDrinks = "33333333-3333-4333-8333-333333333307";
 
   const m1 = "44444444-4444-4444-8444-444444444401";
   const m2 = "44444444-4444-4444-8444-444444444402";
@@ -43,6 +44,9 @@ export function createSeedState(): DatabaseState {
   const m14 = "44444444-4444-4444-8444-444444444414";
   const m15 = "44444444-4444-4444-8444-444444444415";
   const m16 = "44444444-4444-4444-8444-444444444416";
+  const m17 = "44444444-4444-4444-8444-444444444417";
+  const m18 = "44444444-4444-4444-8444-444444444418";
+  const m19 = "44444444-4444-4444-8444-444444444419";
 
   const sPast1 = "55555555-5555-4555-8555-555555555500";
   const sT1 = "55555555-5555-4555-8555-555555555501";
@@ -56,8 +60,8 @@ export function createSeedState(): DatabaseState {
     settings: {
       name: "KORA Kitchen & Grill",
       tagline: "Wood-Fired Contemporary Indian Bistro",
-      address: "42 Indiranagar 100ft Road, Bengaluru 560038",
-      gstin: "29AABCK4821M1Z5",
+      address: "Road No. 36, Jubilee Hills, Hyderabad 500033",
+      gstin: "36AABCK4821M1Z5",
       tax_rate_percent: 5,
       service_charge_percent: 0,
       currency_symbol: "₹",
@@ -66,7 +70,7 @@ export function createSeedState(): DatabaseState {
     users: [
       {
         id: uOwner,
-        full_name: "Arjun Mehta",
+        full_name: "Yuvaraj",
         email: "owner@kora.in",
         role: "owner",
         phone: "+91 98450 11220",
@@ -261,6 +265,7 @@ export function createSeedState(): DatabaseState {
       { id: cCurries, name: "Artisanal Curries", description: "Heirloom gravies simmered to order", sort_order: 4, is_active: true },
       { id: cBreads, name: "Breads & Rice", description: "Hand-stretched tandoori breads & pulao", sort_order: 5, is_active: true },
       { id: cDrinks, name: "Beverages & Sweet", description: "House sodas, artisanal chai & desserts", sort_order: 6, is_active: true },
+      { id: cSoftDrinks, name: "Soft Drinks", description: "Chilled sodas, aerated colas & packaged natural mineral water", sort_order: 7, is_active: true },
     ],
     menu_items: [
       {
@@ -554,6 +559,57 @@ export function createSeedState(): DatabaseState {
         variants: [],
         addons: [],
       },
+        {
+          id: m17,
+          category_id: cSoftDrinks,
+          name: "Thums Up",
+          description: "Charged strong carbonated cola with an iconic punch of spicy fizz, served chilled (330ml).",
+          price: 45,
+          dietary: "veg",
+          spice_level: 0,
+          prep_minutes: 2,
+          image_url: "/dishes/kokum-fizz.jpg",
+          is_bestseller: true,
+          is_available: true,
+          stock_count: 60,
+          deleted_at: null,
+          variants: [],
+          addons: [],
+        },
+        {
+          id: m18,
+          category_id: cSoftDrinks,
+          name: "Pepsi",
+          description: "Classic crisp refreshing cola with smooth bubbles, served chilled (330ml).",
+          price: 45,
+          dietary: "veg",
+          spice_level: 0,
+          prep_minutes: 2,
+          image_url: "/dishes/filter-coffee-tonic.jpg",
+          is_bestseller: false,
+          is_available: true,
+          stock_count: 60,
+          deleted_at: null,
+          variants: [],
+          addons: [],
+        },
+        {
+          id: m19,
+          category_id: cSoftDrinks,
+          name: "Water Bottle",
+          description: "Packaged natural mineral water bottle, sealed and chilled (1000ml).",
+          price: 25,
+          dietary: "veg",
+          spice_level: 0,
+          prep_minutes: 1,
+          image_url: "/dishes/kokum-fizz.jpg",
+          is_bestseller: false,
+          is_available: true,
+          stock_count: 100,
+          deleted_at: null,
+          variants: [],
+          addons: [],
+        },
     ],
     orders: [
       // Completed historical order for revenue metrics
@@ -1065,7 +1121,7 @@ export function createSeedState(): DatabaseState {
         category: "utilities",
         amount: 1850,
         expense_date: new Date().toISOString().slice(0, 10),
-        recorded_by: "Arjun Mehta",
+        recorded_by: "Yuvaraj",
         created_at: minsAgo(260),
       },
     ],
